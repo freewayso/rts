@@ -255,10 +255,18 @@ ss_e Settings_Create(struct setting sett)
         int put_status;
         k = kh_put(setting, s_settings_table, key, &put_status);
 
-        if(put_status == -1)
+        if(put_status == -1) {
+            void *leak = (void*)key;
+            PF_FREE(leak);
             return SS_BADALLOC;
-        if(!sett_add_priv(key, (struct setting_priv){0}))
+        }
+        /* 0 = already present (loaded from pf.conf before the module registered it) */
+        if(put_status == 0) {
+            void *unused = (void*)key;
+            PF_FREE(unused);
+        }else if(!sett_add_priv(key, (struct setting_priv){0})) {
             return SS_BADALLOC;
+        }
     }
 
     kh_value(s_settings_table, k) = sett;

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #
 #  This file is part of Permafrost Engine. 
 #  Copyright (C) 2018-2023 Eduard Permyakov 
@@ -47,6 +48,9 @@ import common.views.perf_stats_window as psw
 
 import common.views.session_window as sw
 
+import views.lobby_window as lw
+import view_controllers.lobby_vc as lvc
+
 import common.constants
 
 class DemoVC(vc.ViewController):
@@ -56,10 +60,11 @@ class DemoVC(vc.ViewController):
         self.__perf_view = psw.PerfStatsWindow()
         self.__settings_vc = tbvc.TabBarVC(stw.SettingsTabbedWindow(),
             tab_change_event=common.constants.EVENT_SETTINGS_TAB_SEL_CHANGED)
-        self.__settings_vc.push_child("Video", vsvc.VideoSettingsVC(vsw.VideoSettingsWindow()))
-        self.__settings_vc.push_child("Game", gsvc.GameSettingsVC(gsw.GameSettingsWindow()))
+        self.__settings_vc.push_child("视频", vsvc.VideoSettingsVC(vsw.VideoSettingsWindow()))
+        self.__settings_vc.push_child("游戏", gsvc.GameSettingsVC(gsw.GameSettingsWindow()))
         self.__settings_shown = False
         self.__session_view = sw.SessionWindow()
+        self.__lobby_vc = lvc.LobbyVC(lw.LobbyWindow())
 
         self.__view.fac_names = [fac["name"] for fac in pf.get_factions_list()]
         assert len(self.__view.fac_names) > 0
@@ -115,10 +120,12 @@ class DemoVC(vc.ViewController):
         pf.register_ui_event_handler(EVENT_SESSION_SHOW, DemoVC.__on_session_show, self)
         pf.register_ui_event_handler(common.constants.EVENT_SESSION_SAVE_REQUESTED, DemoVC.__on_session_save, self)
         pf.register_ui_event_handler(common.constants.EVENT_SESSION_LOAD_REQUESTED, DemoVC.__on_session_load, self)
+        self.__lobby_vc.activate()
         self.__view.show()
 
     def deactivate(self):
         self.__view.hide()
+        self.__lobby_vc.deactivate()
         pf.unregister_event_handler(common.constants.EVENT_SESSION_SAVE_REQUESTED, DemoVC.__on_session_save)
         pf.unregister_event_handler(common.constants.EVENT_SESSION_LOAD_REQUESTED, DemoVC.__on_session_load)
         pf.unregister_event_handler(EVENT_SESSION_SHOW, DemoVC.__on_session_show)

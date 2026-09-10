@@ -186,18 +186,35 @@ Follow the development of Permafrost Engine and EVERGLORY on [YouTube](https://w
 
 [EVERGLORY: Teaser Trailer #3 \[Indie RTS Game\]](https://www.youtube.com/watch?v=aiHjiG-feNA)
 
+## This fork ##
+
+This tree is a modified fork of [eduard-permyakov/permafrost-engine](https://github.com/eduard-permyakov/permafrost-engine).
+It adds dedicated room-server lockstep (KCP), an external lobby directory, and related client hooks.
+
+| | |
+|---|---|
+| Maintainer | freewayso |
+| GitHub | https://github.com/freewayso |
+| Contact | 719452210@qq.com |
+
+See `NOTICE.md` for attribution, third-party licenses, and files that must not be redistributed.
+
 ## License ##
 
-The source code of Permafrost Engine is freely available under the GPLv3 license, with a special linking exception. 
-However, I may grant permission to use parts or all of the code under a different license on a case-by-case basis. 
-Please inquire by e-mail.
+The source code of Permafrost Engine remains under the GPLv3 license, with a special linking exception
+(`LICENSE.txt`). This fork is distributed under the same terms.
+
+KCP (`src/net/ikcp.c`, `src/net/ikcp.h`) is MIT-licensed; see `LICENSE-KCP.txt`.
+
+The original author may grant permission to use parts or all of the *upstream* code under a different
+license on a case-by-case basis. Please inquire by e-mail to the original author.
 
 ## Comments/Questions ##
 
-You may contact me with any questions, comments, or concerns pertaining to the source code or the underlying algorithms. 
-In addition, you may solicit me regarding interesting job opportunities.
+**This fork:** freewayso — https://github.com/freewayso — 719452210@qq.com
 
-Discuss EVERGLORY and its' development on [Discord](https://discord.gg/jSQ8M6C). 
+**Upstream engine:** You may contact Eduard Permyakov with questions about the original source or
+algorithms. E-mail: edward.permyakov@gmail.com
 
-My e-mail is: edward.permyakov@gmail.com
+Discuss EVERGLORY and its development on [Discord](https://discord.gg/jSQ8M6C).
 

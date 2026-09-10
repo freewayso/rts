@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #
 #  This file is part of Permafrost Engine. 
 #  Copyright (C) 2019-2023 Eduard Permyakov 
@@ -41,7 +42,7 @@ class SessionWindow(pf.Window):
 
     def __init__(self):
         vresx, vresy = (1920, 1080)
-        super(SessionWindow, self).__init__("Session",
+        super(SessionWindow, self).__init__("会话",
             (vresx / 2 - SessionWindow.WINDOW_WIDTH/ 2, vresy / 2 - SessionWindow.WINDOW_HEIGHT / 2, 
             SessionWindow.WINDOW_WIDTH, SessionWindow.WINDOW_HEIGHT), 
             pf.NK_WINDOW_BORDER | pf.NK_WINDOW_NO_SCROLLBAR | pf.NK_WINDOW_TITLE | pf.NK_WINDOW_CLOSABLE, (vresx, vresy))
@@ -50,7 +51,7 @@ class SessionWindow(pf.Window):
     def update(self):
 
         self.layout_row_dynamic(20, 1)
-        self.label_colored_wrap("Session File:", (175, 175, 175))
+        self.label_colored_wrap("会话文件:", (175, 175, 175))
         self.layout_row_dynamic(30, 1)
         self.filestring = self.edit_string(pf.NK_EDIT_SIMPLE, self.filestring)
 
@@ -61,6 +62,6 @@ class SessionWindow(pf.Window):
             pf.global_event(EVENT_SESSION_LOAD_REQUESTED, self.filestring)
 
         self.layout_row_dynamic(30, 2)
-        self.button_label("Save", on_save)
-        self.button_label("Load", on_load)
+        self.button_label("保存", on_save)
+        self.button_label("加载", on_load)
 

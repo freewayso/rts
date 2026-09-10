@@ -42,5 +42,11 @@
 bool G_Timer_Init(void);
 void G_Timer_Shutdown(void);
 
+/* When false, 10/20Hz sim ticks are not derived from the SDL wall clock.
+ * Lockstep then drives them via G_Timer_EmitOne60Hz. EVENT_60HZ_TICK still
+ * fires from SDL for rendering and UI. */
+void G_Timer_SetWallSim(bool on);
+void G_Timer_EmitOne60Hz(void);
+
 #endif
 

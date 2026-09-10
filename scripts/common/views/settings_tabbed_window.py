@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #
 #  This file is part of Permafrost Engine. 
 #  Copyright (C) 2019-2023 Eduard Permyakov 
@@ -51,7 +52,7 @@ class SettingsTabbedWindow(pf.Window):
 
         dims = ((vresx - SettingsTabbedWindow.WIDTH)/2, (vresy - SettingsTabbedWindow.HEIGHT)/2, 
             SettingsTabbedWindow.WIDTH, SettingsTabbedWindow.HEIGHT)
-        super(SettingsTabbedWindow, self).__init__("Settings", dims, 
+        super(SettingsTabbedWindow, self).__init__("设置", dims, 
             pf.NK_WINDOW_NO_SCROLLBAR | pf.NK_WINDOW_MOVABLE | pf.NK_WINDOW_BORDER | pf.NK_WINDOW_TITLE | pf.NK_WINDOW_CLOSABLE, (vresx, vresy))
         self.padding = (0.0, 0.0)
 
@@ -111,12 +112,12 @@ class SettingsTabbedWindow(pf.Window):
         def apply_done_group():
             self.layout_row_dynamic(20, 1)
             if self.child_windows[self.active_idx].dirty:
-                self.label_colored_wrap("You have unsaved changes on this page.", (255, 0, 0))
+                self.label_colored_wrap("当前页有未保存的更改。", (255, 0, 0))
             else:
-                self.label_colored_wrap("No unsaved changes.", (0, 255, 0))
+                self.label_colored_wrap("没有未保存的更改。", (0, 255, 0))
             self.layout_row_dynamic(30, 2)
-            self.button_label("Apply", on_apply)
-            self.button_label("Done", on_exit)
+            self.button_label("应用", on_apply)
+            self.button_label("完成", on_exit)
 
         self.group("SettingsApplyDone", pf.NK_WINDOW_NO_SCROLLBAR, apply_done_group)
 

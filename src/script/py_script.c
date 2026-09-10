@@ -83,6 +83,8 @@
 #include "../sched.h"
 #include "../asset_load.h"
 #include "../sprite.h"
+#include "../net/public/lockstep.h"
+#include "../net/lobby.h"
 
 #include <SDL.h>
 #include <mimalloc-stats.h>
@@ -296,6 +298,15 @@ static PyObject *PyPf_get_version_string(PyObject *self);
 
 static PyObject *PyPf_spawn_sprite_static(PyObject *self, PyObject *args);
 static PyObject *PyPf_spawn_sprite_animated(PyObject *self, PyObject *args);
+
+static PyObject *PyPf_lobby_list_rooms(PyObject *self, PyObject *args);
+static PyObject *PyPf_lockstep_join(PyObject *self, PyObject *args);
+static PyObject *PyPf_lockstep_status(PyObject *self);
+static PyObject *PyPf_lockstep_tick(PyObject *self);
+static PyObject *PyPf_lockstep_player_id(PyObject *self);
+static PyObject *PyPf_lockstep_num_players(PyObject *self);
+static PyObject *PyPf_lockstep_seed(PyObject *self);
+static PyObject *PyPf_lockstep_enabled(PyObject *self);
 
 /*****************************************************************************/
 /* STATIC VARIABLES                                                          */
@@ -1046,6 +1057,39 @@ static PyMethodDef pf_module_methods[] = {
     "(4-tuple of a filename, the row count, the column count, and the frame count). "
     "The additional parameters are ws_pos (worldspace position), ws_size (worldspace size), "
     "the fps (integer), and the repeat count (integer)."},
+
+    {"lobby_list_rooms",
+    (PyCFunction)PyPf_lobby_list_rooms, METH_VARARGS,
+    "Query the lobby directory for dedicated room servers. Args: host (str), optional port (int, default 27000). "
+    "Returns a list of dicts with id, name, host, port, players, max_players, seed."},
+
+    {"lockstep_join",
+    (PyCFunction)PyPf_lockstep_join, METH_VARARGS,
+    "Join a dedicated room server. Args: ip (str), optional UDP port (int, default 40000)."},
+
+    {"lockstep_status",
+    (PyCFunction)PyPf_lockstep_status, METH_NOARGS,
+    "Lockstep/network status string (off, connecting, waiting, playing, ...)."},
+
+    {"lockstep_tick",
+    (PyCFunction)PyPf_lockstep_tick, METH_NOARGS,
+    "Current lockstep tick id."},
+
+    {"lockstep_player_id",
+    (PyCFunction)PyPf_lockstep_player_id, METH_NOARGS,
+    "Local lockstep player id, or 0 if not in a match."},
+
+    {"lockstep_num_players",
+    (PyCFunction)PyPf_lockstep_num_players, METH_NOARGS,
+    "Configured number of players for the current match."},
+
+    {"lockstep_seed",
+    (PyCFunction)PyPf_lockstep_seed, METH_NOARGS,
+    "Match seed from the room server."},
+
+    {"lockstep_enabled",
+    (PyCFunction)PyPf_lockstep_enabled, METH_NOARGS,
+    "True if lockstep client/host is active."},
 
     {NULL}  /* Sentinel */
 };
@@ -4252,6 +4296,97 @@ static PyObject *PyPf_spawn_sprite_animated(PyObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+static PyObject *PyPf_lobby_list_rooms(PyObject *self, PyObject *args)
+{
+    const char *host = "127.0.0.1";
+    int port = LOBBY_DEFAULT_PORT;
+    struct lobby_room rooms[LOBBY_MAX_ROOMS];
+    int n, i;
+    PyObject *list;
+
+    if(!PyArg_ParseTuple(args, "|si", &host, &port)) {
+        PyErr_SetString(PyExc_TypeError, "lobby_list_rooms([host[, port]])");
+        return NULL;
+    }
+    if(port <= 0 || port > 65535)
+        port = LOBBY_DEFAULT_PORT;
+
+    n = Lobby_ListRooms(host, (uint16_t)port, rooms, LOBBY_MAX_ROOMS);
+    if(n < 0) {
+        PyErr_SetString(PyExc_IOError, "Failed to reach lobby server.");
+        return NULL;
+    }
+    list = PyList_New(n);
+    if(!list)
+        return NULL;
+    for(i = 0; i < n; i++) {
+        PyObject *item = Py_BuildValue("{s:i,s:s,s:s,s:i,s:i,s:i,s:I}",
+            "id", rooms[i].id,
+            "name", rooms[i].name,
+            "host", rooms[i].host,
+            "port", (int)rooms[i].port,
+            "players", rooms[i].players,
+            "max_players", rooms[i].max_players,
+            "seed", rooms[i].seed);
+        if(!item) {
+            Py_DECREF(list);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, i, item);
+    }
+    return list;
+}
+
+static PyObject *PyPf_lockstep_join(PyObject *self, PyObject *args)
+{
+    const char *ip;
+    int port = LS_DEFAULT_PORT;
+
+    if(!PyArg_ParseTuple(args, "s|i", &ip, &port)) {
+        PyErr_SetString(PyExc_TypeError, "lockstep_join(ip[, port])");
+        return NULL;
+    }
+    if(port <= 0 || port > 65535)
+        port = LS_DEFAULT_PORT;
+    if(!LS_StartClient(ip, (uint16_t)port)) {
+        PyErr_SetString(PyExc_IOError, "Failed to connect to room server.");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *PyPf_lockstep_status(PyObject *self)
+{
+    return PyString_FromString(LS_Status());
+}
+
+static PyObject *PyPf_lockstep_tick(PyObject *self)
+{
+    return PyLong_FromUnsignedLong(LS_Tick());
+}
+
+static PyObject *PyPf_lockstep_player_id(PyObject *self)
+{
+    return PyInt_FromLong(LS_PlayerId());
+}
+
+static PyObject *PyPf_lockstep_num_players(PyObject *self)
+{
+    return PyInt_FromLong(LS_NumPlayers());
+}
+
+static PyObject *PyPf_lockstep_seed(PyObject *self)
+{
+    return PyLong_FromUnsignedLong(LS_Seed());
+}
+
+static PyObject *PyPf_lockstep_enabled(PyObject *self)
+{
+    if(LS_Enabled())
+        Py_RETURN_TRUE;
+    Py_RETURN_FALSE;
+}
+
 static void script_task_destructor(void *arg)
 {
     PF_FREE(arg);
@@ -4767,11 +4902,7 @@ void S_ShowLastError(void)
     if(s_err_ctx.occurred) {
         s_err_ctx.prev_state = G_GetSimState();
         G_SetSimState(G_PAUSED_FULL);
-
-        struct sval setting;
-        if(Settings_Get("pf.debug.log_python", &setting) == SS_OKAY && setting.as_bool) {
-            S_Error_Print(&s_err_ctx);
-        }
+        S_Error_Print(&s_err_ctx);
     }
 }
 

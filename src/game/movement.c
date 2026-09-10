@@ -69,7 +69,7 @@
 #include "../lib/public/pf_string.h"
 #include "../lib/public/stalloc.h"
 #include "../anim/public/anim.h"
-#include "../lib/public/stalloc.h"
+#include "../net/public/lockstep.h"
 
 #include <assert.h>
 #include <SDL.h>
@@ -4767,6 +4767,10 @@ void G_Move_RemoveEntity(uint32_t uid)
 void G_Move_Stop(uint32_t uid)
 {
     ASSERT_IN_MAIN_THREAD();
+    if(LS_ShouldQueueInput()) {
+        LS_QueueStop(uid);
+        return;
+    }
     move_push_cmd((struct move_cmd){
         .type = MOVE_CMD_STOP,
         .args[0] = (struct attr){
@@ -4857,6 +4861,10 @@ void G_Move_SetCombatFacing(uint32_t uid, quat_t dir)
 void G_Move_SetDest(uint32_t uid, vec2_t dest_xz, bool attack)
 {
     ASSERT_IN_MAIN_THREAD();
+    if(LS_ShouldQueueInput()) {
+        LS_QueueMove(uid, dest_xz, attack);
+        return;
+    }
     move_push_cmd((struct move_cmd){
         .type = MOVE_CMD_SET_DEST,
         .args[0] = (struct attr){

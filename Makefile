@@ -118,7 +118,9 @@ WINDOWS_LDFLAGS = \
 	-llibpython2.7 \
 	-lOpenAL32 \
 	-lopengl32 \
-	-luuid
+	-luuid \
+	-lpsapi \
+	-lws2_32
 
 WINDOWS_DEFS = -DMS_WIN64
 
@@ -157,6 +159,7 @@ WARNING_FLAGS = \
 	-Wno-missing-braces \
 	-Wno-unused-function \
 	-Wno-unused-variable \
+	-Wno-unused-but-set-variable \
 	-Werror
 
 EXTRA_DEBUG_FLAGS = -g
@@ -277,10 +280,17 @@ endif
 
 deps: $(DEPS)
 
-$(PF_SRC_OBJS): ./obj/%.o: ./src/%.c
+PF_COMPILE_OBJS = $(filter-out ./obj/net/ikcp.o,$(PF_SRC_OBJS))
+
+$(PF_COMPILE_OBJS): ./obj/%.o: ./src/%.c
 	@mkdir -p $(dir $@)
 	@printf "%-8s %s\n" "[CC]" $@
 	@$(CC) -MT $@ -MMD -MP -MF ./obj/$*.d $(CFLAGS) $(DEFS) -c $< -o $@
+
+./obj/net/ikcp.o: ./src/net/ikcp.c
+	@mkdir -p $(dir $@)
+	@printf "%-8s %s\n" "[CC]" $@
+	@$(CC) -MT $@ -MMD -MP -MF ./obj/net/ikcp.d $(filter-out -Werror,$(CFLAGS)) -w $(DEFS) -c $< -o $@
 
 $(PF_ASM_OBJS): ./obj/%.o: ./src/%.S
 	@mkdir -p $(dir $@)
@@ -301,7 +311,29 @@ endif
 
 -include $(PF_DEPS)
 
-.PHONY: pf clean run run_editor clean_deps launchers .FORCE
+ifeq ($(PLAT),WINDOWS)
+ROOM_BIN = ./lib/room_server.exe
+ROOM_EXTRA_LIBS = -lws2_32
+else
+ROOM_BIN = ./bin/room_server
+ROOM_EXTRA_LIBS =
+endif
+
+ROOM_NET_OBJS = \
+	./obj/net/ikcp.o \
+	./obj/net/kcp_udp.o \
+	./obj/net/protocol.o \
+	./obj/net/cmd_buffer.o \
+	./obj/net/lobby.o
+
+$(ROOM_BIN): tools/room_server.c $(ROOM_NET_OBJS)
+	@mkdir -p $(dir $@)
+	@printf "%-8s %s\n" "[LD]" $@
+	@$(CC) $(CFLAGS) $(DEFS) -o $@ tools/room_server.c $(ROOM_NET_OBJS) $(ROOM_EXTRA_LIBS)
+
+room_server: $(ROOM_BIN)
+
+.PHONY: pf room_server clean run run_editor clean_deps launchers .FORCE
 
 pf: $(BIN)
 

@@ -61,6 +61,7 @@
 
 static unsigned long long s_num_60hz_ticks;
 static SDL_TimerID        s_60hz_timer;
+static bool               s_wall_sim = true;
 
 /*****************************************************************************/
 /* STATIC FUNCTIONS                                                          */
@@ -96,10 +97,8 @@ static uint32_t timer_callback(uint32_t interval, void *param)
     return interval;
 }
 
-static void timer_60hz_handler(void *unused1, void *unused2)
+static void emit_derived(void)
 {
-    s_num_60hz_ticks++;
-
     if(s_num_60hz_ticks % 120 == 0)
         E_Global_Notify(EVENT_HALFHZ_TICK, NULL, ES_ENGINE);
 
@@ -120,6 +119,14 @@ static void timer_60hz_handler(void *unused1, void *unused2)
 
     if(s_num_60hz_ticks % 2 == 0)
         E_Global_Notify(EVENT_30HZ_TICK, NULL, ES_ENGINE);
+}
+
+static void timer_60hz_handler(void *unused1, void *unused2)
+{
+    if(!s_wall_sim)
+        return;
+    s_num_60hz_ticks++;
+    emit_derived();
 }
 
 /*****************************************************************************/
@@ -143,5 +150,18 @@ void G_Timer_Shutdown(void)
 {
     E_Global_Unregister(EVENT_60HZ_TICK, timer_60hz_handler);
     SDL_RemoveTimer(s_60hz_timer);
+}
+
+void G_Timer_SetWallSim(bool on)
+{
+    s_wall_sim = on;
+    if(!on)
+        s_num_60hz_ticks = 0;
+}
+
+void G_Timer_EmitOne60Hz(void)
+{
+    s_num_60hz_ticks++;
+    emit_derived();
 }
 

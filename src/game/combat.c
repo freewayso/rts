@@ -48,6 +48,7 @@
 #include "../ui.h"
 #include "../event.h"
 #include "../entity.h"
+#include "../net/public/lockstep.h"
 #include "../main.h"
 #include "../perf.h"
 #include "../settings.h"
@@ -2719,6 +2720,10 @@ bool G_Combat_Idle(uint32_t uid)
 
 void G_Combat_AttackUnit(uint32_t uid, uint32_t target)
 {
+    if(LS_ShouldQueueInput()) {
+        LS_QueueAttack(uid, target);
+        return;
+    }
     combat_push_cmd((struct combat_cmd){
         .type = COMBAT_CMD_ATTACK_UNIT,
         .args[0] = (struct attr){
@@ -2734,6 +2739,10 @@ void G_Combat_AttackUnit(uint32_t uid, uint32_t target)
 
 void G_Combat_StopAttack(uint32_t uid)
 {
+    if(LS_ShouldQueueInput()) {
+        LS_QueueStop(uid);
+        return;
+    }
     combat_push_cmd((struct combat_cmd){
         .type = COMBAT_CMD_STOP_ATTACK,
         .args[0] = (struct attr){

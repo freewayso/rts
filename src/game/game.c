@@ -81,6 +81,8 @@
 #include "../sched.h"
 #include "../sprite.h"
 
+#include "../net/public/lockstep.h"
+
 #include <assert.h> 
 
 #undef PF_MALLOC
@@ -1808,6 +1810,7 @@ bool G_Init(void)
     G_Sel_Init();
     G_Sel_Enable();
     G_Timer_Init();
+    LS_Init();
     G_StorageSite_Init();
     G_Population_Init();
 
@@ -2140,6 +2143,7 @@ void G_Shutdown(void)
 
     G_Population_Shutdown();
     G_StorageSite_Shutdown();
+    LS_Shutdown();
     G_Timer_Shutdown();
     G_Sel_Shutdown();
 
@@ -2164,6 +2168,8 @@ void G_Update(void)
 {
     PERF_ENTER();
     ASSERT_IN_MAIN_THREAD();
+
+    LS_Pump();
 
     if(s_gs.map) {
         G_Fog_UpdateVisionState();

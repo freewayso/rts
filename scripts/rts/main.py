@@ -44,6 +44,7 @@ import view_controllers.demo_vc as dvc
 
 from constants import *
 from units import *
+import spawn_mobs
 
 ############################################################
 # Global configs                                           #
@@ -52,7 +53,7 @@ from units import *
 pf.set_ambient_light_color((1.0, 1.0, 1.0))
 pf.set_emit_light_color((1.0, 1.0, 1.0))
 pf.set_emit_light_pos((1664.0, 1024.0, 384.0))
-pf.set_active_font("OptimusPrinceps.ttf")
+pf.set_active_font("simhei.ttf")
 
 ############################################################
 # Setup map/scene                                          #
@@ -69,6 +70,8 @@ pf.set_diplomacy_state(2, 3, pf.DIPLOMACY_STATE_WAR)
 pf.set_faction_controllable(0, False)
 pf.set_faction_controllable(2, False)
 pf.set_faction_controllable(3, False)
+
+spawn_mobs.setup()
 
 ############################################################
 # Setup global events                                      #

@@ -51,7 +51,10 @@
 #include "mem.h"
 #include "game/public/game.h"
 
+#include "lib/public/stalloc.h"
+
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include <assert.h>
 
@@ -319,21 +322,27 @@ static void ui_init_font_stash(struct nk_context *ctx)
         char path[NK_MAX_PATH_LEN];
         pf_snprintf(path, sizeof(path), "%s/%s", fontdir, files[i].name);
 
-        static const nk_rune glyph_ranges[] = {
-            /* English */
+        /* Full CJK at 16px + 32px overflows the 64MB render-arg block, so the
+         * atlas never reaches the GPU and every UI widget disappears. Latin
+         * fonts stay ASCII-only; CJK fonts bake the unified ideograph range
+         * at 16px only. */
+        static const nk_rune latin_glyph_ranges[] = {
             0x0020, 0x00FF,
-            /* Chinese */
+            0
+        };
+        static const nk_rune cjk_glyph_ranges[] = {
+            0x0020, 0x00FF,
             0x3000, 0x30FF,
             0x31F0, 0x31FF,
             0xFF00, 0xFFEF,
             0x4e00, 0x9FAF,
-            /* Cyrillic */
-            0x0400, 0x052F,
-            0x2DE0, 0x2DFF,
-            0xA640, 0xA69F,
-            /* Terminator */
             0
         };
+        /* HYZhongHeiTi-197 is a small specialist subset (no ASCII / no common
+         * simplified Chinese). Only bake the full CJK range for complete UI fonts. */
+        const int is_cjk = (strstr(files[i].name, "simhei") != NULL)
+                        || (strstr(files[i].name, "SimHei") != NULL)
+                        || (strstr(files[i].name, "msyh") != NULL);
 
         enum font_size{
             FONT_NORMAL,
@@ -346,11 +355,14 @@ static void ui_init_font_stash(struct nk_context *ctx)
         };
         for(enum font_size fs = 0; fs < NUM_FONT_SIZES; fs++) {
 
+            if(is_cjk && fs == FONT_LARGE)
+                continue;
+
             size_t font_size = font_sizes[fs];
             struct nk_font_config config = nk_font_config(font_size);
             config.oversample_h = 1;
             config.oversample_v = 1;
-            config.range = glyph_ranges;
+            config.range = is_cjk ? cjk_glyph_ranges : latin_glyph_ranges;
 
             struct nk_font *font = nk_font_atlas_add_from_file(&s_atlas, path, font_size, &config);
             if(!font)
@@ -376,17 +388,24 @@ static void ui_init_font_stash(struct nk_context *ctx)
     PF_FREE(files);
     image = nk_font_atlas_bake(&s_atlas, &w, &h, NK_FONT_ATLAS_RGBA32);
 
-    R_PushCmd((struct rcmd){
-        .func = R_GL_UI_UploadFontAtlas,
-        .nargs = 3,
-        .args = {
-            R_PushArg(image, w * h * sizeof(uint32_t)),
-            R_PushArg(&w, sizeof(w)),
-            R_PushArg(&h, sizeof(h)),
-        },
-    });
-
-    Engine_FlushRenderWorkQueue();
+    {
+        size_t atlas_bytes = (size_t)w * (size_t)h * sizeof(uint32_t);
+        fprintf(stderr, "UI: font atlas %dx%d (%zu bytes)\n", w, h, atlas_bytes);
+        if(!image || atlas_bytes == 0 || atlas_bytes > MEMBLOCK_SZ) {
+            fprintf(stderr, "UI: font atlas too large for render queue; UI text disabled\n");
+        }else{
+            R_PushCmd((struct rcmd){
+                .func = R_GL_UI_UploadFontAtlas,
+                .nargs = 3,
+                .args = {
+                    R_PushArg(image, atlas_bytes),
+                    R_PushArg(&w, sizeof(w)),
+                    R_PushArg(&h, sizeof(h)),
+                },
+            });
+            Engine_FlushRenderWorkQueue();
+        }
+    }
 
     nk_font_atlas_end(&s_atlas, nk_handle_id(R_UI_GetFontTexID()), &s_null);
     nk_style_set_font(ctx, &s_atlas.default_font->handle);

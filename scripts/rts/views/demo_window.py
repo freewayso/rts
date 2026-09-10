@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #
 #  This file is part of Permafrost Engine. 
 #  Copyright (C) 2018-2023 Eduard Permyakov 
@@ -38,10 +39,10 @@ from constants import *
 class DemoWindow(pf.Window):
 
     WIDTH = 250
-    HEIGHT = 430
+    HEIGHT = 470
 
     def __init__(self):
-        super(DemoWindow, self).__init__("Permafrost Engine Demo", (25, 25, DemoWindow.WIDTH, DemoWindow.HEIGHT), 
+        super(DemoWindow, self).__init__("引擎演示", (25, 25, DemoWindow.WIDTH, DemoWindow.HEIGHT), 
             pf.NK_WINDOW_BORDER | pf.NK_WINDOW_MOVABLE | pf.NK_WINDOW_MINIMIZABLE | pf.NK_WINDOW_TITLE |  pf.NK_WINDOW_NO_SCROLLBAR, (1920, 1080))
         self.fac_names = []
         self.active_fac_idx = 0
@@ -60,7 +61,7 @@ class DemoWindow(pf.Window):
                     pf.global_event(EVENT_CONTROLLED_FACTION_CHANGED, i)
 
         self.layout_row_dynamic(20, 1)
-        self.label_colored_wrap("Controlled Faction:", (255, 255, 255))
+        self.label_colored_wrap("控制阵营:", (255, 255, 255))
 
         self.layout_row_dynamic(140, 1)
         self.group("Controlled Faction", pf.NK_WINDOW_BORDER, factions_group)
@@ -88,22 +89,28 @@ class DemoWindow(pf.Window):
         def on_console():
             pf.show_console()
 
-        self.layout_row_dynamic(30, 1)
-        self.button_label("Settings", on_settings)
+        def on_lobby():
+            pf.global_event(EVENT_LOBBY_SHOW, None)
 
         self.layout_row_dynamic(30, 1)
-        self.button_label("Performance", on_performance)
+        self.button_label("设置", on_settings)
 
-        text = lambda p: "Resume " if p else "Pause"
+        self.layout_row_dynamic(30, 1)
+        self.button_label("联机房间", on_lobby)
+
+        self.layout_row_dynamic(30, 1)
+        self.button_label("性能", on_performance)
+
+        text = lambda p: "继续" if p else "暂停"
         self.layout_row_dynamic(30, 1)
         self.button_label(text(pf.get_simstate() != pf.G_RUNNING), on_pause_resume)
 
         self.layout_row_dynamic(30, 1)
-        self.button_label("Session", on_session)
+        self.button_label("会话", on_session)
 
         self.layout_row_dynamic(30, 1)
-        self.button_label("Console", on_console)
+        self.button_label("控制台", on_console)
 
         self.layout_row_dynamic(30, 1)
-        self.button_label("Exit Demo", on_exit)
+        self.button_label("退出演示", on_exit)
 

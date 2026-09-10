@@ -48,4 +48,5 @@ EVENT_SETTINGS_SHOW              = 0x20001
 EVENT_PERF_SHOW                  = 0x20002
 EVENT_SIMSTATE_CHANGE            = 0x20003
 EVENT_SESSION_SHOW               = 0x20004
+EVENT_LOBBY_SHOW                 = 0x20005
 
