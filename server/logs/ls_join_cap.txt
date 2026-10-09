@@ -1,0 +1,66 @@
+﻿ *** [API][Other][Notification] Buffer detailed info: Buffer object 1 (bound to GL_ARRAY_BUFFER_ARB, usage hint is GL_STATIC_DRAW) will use VIDEO memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 2 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 2 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 3 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 3 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 5 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 5 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 6 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 6 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 9 (bound to GL_ARRAY_BUFFER_ARB, usage hint is GL_STATIC_DRAW) will use VIDEO memory as the source for buffer object operations.
+[script] S_RunFile path=D:/study/permafrost-engine-master/scripts/rts/match_online.py
+[script] PyRun_String begin path=D:/study/permafrost-engine-master/scripts/rts/match_online.py bytes=15090
+[match_online] camera -> faction 2 at (403.6, -392.3) n=16
+[match_online] selected 16/16 own units for ActionPad
+[match_online] multiplayer role=join port=27782 players=2 seed=42 fac=2
+[mp] joining 127.0.0.1:27782 as Join fac=2
+[script] PyRun_String done ok=1
+[match_online] selected 16/16 own units for ActionPad
+[mp] players=8
+[mp] match_start seed=42 players=2 local=1
+  slot=1 fac=2 name=Join ready=0
+[match_online] lockstep_init seed=42 local=1 players=2 host=0
+[lockstep] READY sent local=1
+[mp] lockstep active seed=42 local=1 players=2 host=0
+[lockstep] GO_ACK from player=0
+[lockstep] sim START
+[lockstep] timeout empty frame tick=6 player=0
+[lockstep] timeout empty frame tick=7 player=0
+[lockstep] timeout empty frame tick=8 player=0
+[lockstep] timeout empty frame tick=9 player=0
+[lockstep] timeout empty frame tick=10 player=0
+[lockstep] timeout empty frame tick=11 player=0
+[lockstep] timeout empty frame tick=12 player=0
+[lockstep] timeout empty frame tick=13 player=0
+[lockstep] timeout empty frame tick=14 player=0
+[lockstep] timeout empty frame tick=15 player=0
+[lockstep] timeout empty frame tick=16 player=0
+[lockstep] timeout empty frame tick=17 player=0
+[lockstep] timeout empty frame tick=18 player=0
+[lockstep] timeout empty frame tick=19 player=0
+[lockstep] recv CMD tick=10 from=0 cmds=0
+[lockstep] timeout empty frame tick=20 player=0
+[lockstep] timeout empty frame tick=21 player=0
+[lockstep] timeout empty frame tick=22 player=0
+[lockstep] timeout empty frame tick=23 player=0
+[lockstep] timeout empty frame tick=24 player=0
+[lockstep] timeout empty frame tick=25 player=0
+[lockstep] timeout empty frame tick=26 player=0
+[lockstep] timeout empty frame tick=27 player=0
+[lockstep] timeout empty frame tick=28 player=0
+[lockstep] timeout empty frame tick=29 player=0
+[lockstep] timeout empty frame tick=30 player=0
+[lockstep] timeout empty frame tick=31 player=0
+[lockstep] timeout empty frame tick=32 player=0
+[lockstep] timeout empty frame tick=33 player=0
+[lockstep] timeout empty frame tick=34 player=0
+[lockstep] timeout empty frame tick=35 player=0
+[lockstep] timeout empty frame tick=36 player=0
+[lockstep] timeout empty frame tick=37 player=0
+[lockstep] timeout empty frame tick=38 player=0
+[lockstep] timeout empty frame tick=39 player=0
+[lockstep] timeout empty frame tick=40 player=0
+[lockstep] timeout empty frame tick=41 player=0
+[lockstep] timeout empty frame tick=42 player=0
+[lockstep] timeout empty frame tick=43 player=0
+[lockstep] timeout empty frame tick=44 player=0

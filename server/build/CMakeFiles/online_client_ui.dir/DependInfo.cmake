@@ -1,0 +1,33 @@
+
+# Consider dependencies only in project.
+set(CMAKE_DEPENDS_IN_PROJECT_ONLY OFF)
+
+# The set of languages for which implicit dependencies are needed:
+set(CMAKE_DEPENDS_LANGUAGES
+  )
+
+# The set of dependency files which are needed:
+set(CMAKE_DEPENDS_DEPENDENCY_FILES
+  "D:/study/permafrost-engine-master/src/net/online_client.cpp" "CMakeFiles/online_client_ui.dir/D_/study/permafrost-engine-master/src/net/online_client.cpp.obj" "gcc" "CMakeFiles/online_client_ui.dir/D_/study/permafrost-engine-master/src/net/online_client.cpp.obj.d"
+  "D:/study/permafrost-engine-master/server/client_ui/engine_launch.cpp" "CMakeFiles/online_client_ui.dir/client_ui/engine_launch.cpp.obj" "gcc" "CMakeFiles/online_client_ui.dir/client_ui/engine_launch.cpp.obj.d"
+  "D:/study/permafrost-engine-master/server/client_ui/main_win.cpp" "CMakeFiles/online_client_ui.dir/client_ui/main_win.cpp.obj" "gcc" "CMakeFiles/online_client_ui.dir/client_ui/main_win.cpp.obj.d"
+  "D:/study/permafrost-engine-master/server/client_ui/map_preview.cpp" "CMakeFiles/online_client_ui.dir/client_ui/map_preview.cpp.obj" "gcc" "CMakeFiles/online_client_ui.dir/client_ui/map_preview.cpp.obj.d"
+  "D:/study/permafrost-engine-master/server/common/pb_frame.cpp" "CMakeFiles/online_client_ui.dir/common/pb_frame.cpp.obj" "gcc" "CMakeFiles/online_client_ui.dir/common/pb_frame.cpp.obj.d"
+  "D:/study/permafrost-engine-master/server/common/pf_crypto.cpp" "CMakeFiles/online_client_ui.dir/common/pf_crypto.cpp.obj" "gcc" "CMakeFiles/online_client_ui.dir/common/pf_crypto.cpp.obj.d"
+  "D:/study/permafrost-engine-master/server/common/pf_log.cpp" "CMakeFiles/online_client_ui.dir/common/pf_log.cpp.obj" "gcc" "CMakeFiles/online_client_ui.dir/common/pf_log.cpp.obj.d"
+  "D:/study/permafrost-engine-master/server/common/tcp_net.cpp" "CMakeFiles/online_client_ui.dir/common/tcp_net.cpp.obj" "gcc" "CMakeFiles/online_client_ui.dir/common/tcp_net.cpp.obj.d"
+  "D:/study/permafrost-engine-master/server/proto/gen/pf_common.pb.cc" "CMakeFiles/online_client_ui.dir/proto/gen/pf_common.pb.cc.obj" "gcc" "CMakeFiles/online_client_ui.dir/proto/gen/pf_common.pb.cc.obj.d"
+  "D:/study/permafrost-engine-master/server/proto/gen/pf_login.pb.cc" "CMakeFiles/online_client_ui.dir/proto/gen/pf_login.pb.cc.obj" "gcc" "CMakeFiles/online_client_ui.dir/proto/gen/pf_login.pb.cc.obj.d"
+  "D:/study/permafrost-engine-master/server/proto/gen/pf_room.pb.cc" "CMakeFiles/online_client_ui.dir/proto/gen/pf_room.pb.cc.obj" "gcc" "CMakeFiles/online_client_ui.dir/proto/gen/pf_room.pb.cc.obj.d"
+  )
+
+# Targets to which this target links which contain Fortran sources.
+set(CMAKE_Fortran_TARGET_LINKED_INFO_FILES
+  )
+
+# Targets to which this target links which contain Fortran sources.
+set(CMAKE_Fortran_TARGET_FORWARD_LINKED_INFO_FILES
+  )
+
+# Fortran module output directory.
+set(CMAKE_Fortran_TARGET_MODULE_DIR "")

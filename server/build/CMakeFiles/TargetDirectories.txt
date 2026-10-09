@@ -1,0 +1,8 @@
+D:/study/permafrost-engine-master/server/build/CMakeFiles/login_server.dir
+D:/study/permafrost-engine-master/server/build/CMakeFiles/room_server.dir
+D:/study/permafrost-engine-master/server/build/CMakeFiles/online_client_ui.dir
+D:/study/permafrost-engine-master/server/build/CMakeFiles/online_smoke_test.dir
+D:/study/permafrost-engine-master/server/build/CMakeFiles/join_smoke.dir
+D:/study/permafrost-engine-master/server/build/CMakeFiles/deploy_runtime_dlls.dir
+D:/study/permafrost-engine-master/server/build/CMakeFiles/edit_cache.dir
+D:/study/permafrost-engine-master/server/build/CMakeFiles/rebuild_cache.dir

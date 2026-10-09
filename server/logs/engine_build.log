@@ -1,0 +1,430 @@
+mkdir -p ./lib
+mkdir -p ./deps/SDL2/build
+cd ./deps/SDL2/build \
+	&& ../configure --host=x86_64-w64-mingw32 \
+	&& make
+configure: loading site script /etc/config.site
+checking build system type... x86_64-pc-cygwin
+checking host system type... x86_64-w64-mingw32
+checking how to print strings... printf
+checking for x86_64-w64-mingw32-gcc... x86_64-w64-mingw32-gcc
+checking whether the C compiler works... yes
+checking for C compiler default output file name... a.exe
+checking for suffix of executables... .exe
+checking whether we are cross compiling... no
+checking for suffix of object files... o
+checking whether the compiler supports GNU C... yes
+checking whether x86_64-w64-mingw32-gcc accepts -g... yes
+checking for x86_64-w64-mingw32-gcc option to enable C11 features... none needed
+checking for a sed that does not truncate output... /usr/bin/sed
+checking for grep that handles long lines and -e... /usr/bin/grep
+checking for egrep... /usr/bin/grep -E
+checking for fgrep... /usr/bin/grep -F
+checking for ld used by x86_64-w64-mingw32-gcc... C:/msys64/mingw64/x86_64-w64-mingw32/bin/ld.exe
+checking if the linker (C:/msys64/mingw64/x86_64-w64-mingw32/bin/ld.exe) is GNU ld... yes
+checking for BSD- or MS-compatible name lister (nm)... no
+checking for x86_64-w64-mingw32-dumpbin... no
+checking for x86_64-w64-mingw32-link... no
+checking for dumpbin... no
+checking for link... link -dump
+checking the name lister (nm) interface... BSD nm
+checking whether ln -s works... no, using cp -pR
+checking the maximum length of command line arguments... 8192
+checking how to convert x86_64-pc-cygwin file names to x86_64-w64-mingw32 format... func_convert_file_cygwin_to_w32
+checking how to convert x86_64-pc-cygwin file names to toolchain format... func_convert_file_noop
+checking for C:/msys64/mingw64/x86_64-w64-mingw32/bin/ld.exe option to reload object files... -r
+checking for x86_64-w64-mingw32-objdump... no
+checking for objdump... objdump
+checking how to recognize dependent libraries... pass_all
+checking for x86_64-w64-mingw32-dlltool... no
+checking for dlltool... dlltool
+checking how to associate runtime and link libraries... func_cygming_dll_for_implib
+checking for x86_64-w64-mingw32-ar... no
+checking for ar... ar
+checking for archiver @FILE support... @
+checking for x86_64-w64-mingw32-strip... no
+checking for strip... strip
+checking for x86_64-w64-mingw32-ranlib... no
+checking for ranlib... ranlib
+checking for gawk... gawk
+checking command to parse nm output from x86_64-w64-mingw32-gcc object... ok
+checking for sysroot... no
+checking for a working dd... /usr/bin/dd
+checking how to truncate binary pipes... /usr/bin/dd bs=4096 count=1
+checking for x86_64-w64-mingw32-mt... no
+checking for mt... no
+checking if : is a manifest tool... no
+checking for stdio.h... yes
+checking for stdlib.h... yes
+checking for string.h... yes
+checking for inttypes.h... yes
+checking for stdint.h... yes
+checking for strings.h... yes
+checking for sys/stat.h... yes
+checking for sys/types.h... yes
+checking for unistd.h... yes
+checking for dlfcn.h... no
+checking for x86_64-w64-mingw32-as... no
+checking for as... as
+checking for x86_64-w64-mingw32-dlltool... dlltool
+checking for x86_64-w64-mingw32-objdump... objdump
+checking for objdir... .libs
+checking if x86_64-w64-mingw32-gcc supports -fno-rtti -fno-exceptions... no
+checking for x86_64-w64-mingw32-gcc option to produce PIC... -DDLL_EXPORT -DPIC
+checking if x86_64-w64-mingw32-gcc PIC flag -DDLL_EXPORT -DPIC works... yes
+checking if x86_64-w64-mingw32-gcc static flag -static works... yes
+checking if x86_64-w64-mingw32-gcc supports -c -o file.o... yes
+checking if x86_64-w64-mingw32-gcc supports -c -o file.o... (cached) yes
+checking whether the x86_64-w64-mingw32-gcc linker (C:/msys64/mingw64/x86_64-w64-mingw32/bin/ld.exe) supports shared libraries... yes
+checking whether -lc should be explicitly linked in... yes
+checking dynamic linker characteristics... Win32 ld.exe
+checking how to hardcode library paths into programs... immediate
+checking whether stripping libraries is possible... yes
+checking if libtool supports shared libraries... yes
+checking whether to build shared libraries... yes
+checking whether to build static libraries... yes
+checking for x86_64-w64-mingw32-windres... no
+checking for windres... windres
+checking for gawk... (cached) gawk
+checking for x86_64-w64-mingw32-gcc... (cached) x86_64-w64-mingw32-gcc
+checking whether the compiler supports GNU C... (cached) yes
+checking whether x86_64-w64-mingw32-gcc accepts -g... (cached) yes
+checking for x86_64-w64-mingw32-gcc option to enable C11 features... (cached) none needed
+checking for x86_64-w64-mingw32-g++... x86_64-w64-mingw32-g++
+checking whether the compiler supports GNU C++... yes
+checking whether x86_64-w64-mingw32-g++ accepts -g... yes
+checking for x86_64-w64-mingw32-g++ option to enable C++11 features... none needed
+checking how to run the C++ preprocessor... x86_64-w64-mingw32-g++ -E
+checking for ld used by x86_64-w64-mingw32-g++... C:/msys64/mingw64/x86_64-w64-mingw32/bin/ld.exe
+checking if the linker (C:/msys64/mingw64/x86_64-w64-mingw32/bin/ld.exe) is GNU ld... yes
+checking whether the x86_64-w64-mingw32-g++ linker (C:/msys64/mingw64/x86_64-w64-mingw32/bin/ld.exe) supports shared libraries... yes
+checking for x86_64-w64-mingw32-g++ option to produce PIC... -DDLL_EXPORT -DPIC
+checking if x86_64-w64-mingw32-g++ PIC flag -DDLL_EXPORT -DPIC works... yes
+checking if x86_64-w64-mingw32-g++ static flag -static works... yes
+checking if x86_64-w64-mingw32-g++ supports -c -o file.o... yes
+checking if x86_64-w64-mingw32-g++ supports -c -o file.o... (cached) yes
+checking whether the x86_64-w64-mingw32-g++ linker (C:/msys64/mingw64/x86_64-w64-mingw32/bin/ld.exe) supports shared libraries... yes
+checking dynamic linker characteristics... Win32 ld.exe
+checking how to hardcode library paths into programs... immediate
+checking for egrep... (cached) /usr/bin/grep -E
+checking for fgrep... (cached) /usr/bin/grep -F
+checking for a BSD-compatible install... /usr/bin/install -c
+checking whether make sets $(MAKE)... yes
+checking for x86_64-w64-mingw32-pkg-config... /mingw64/bin/x86_64-w64-mingw32-pkg-config
+checking pkg-config is at least version 0.9.0... yes
+checking for gsort... no
+checking for sort... sort
+checking for special C compiler options needed for large files... no
+checking for _FILE_OFFSET_BITS value needed for large files... 64
+checking for an ANSI C-conforming const... yes
+checking for inline... inline
+checking for working volatile... yes
+checking for GCC -MMD -MT option... yes
+checking for linker option --no-undefined... yes
+checking for linker option --dynamicbase... yes
+checking for linker option --nxcompat... yes
+checking for linker option --high-entropy-va... yes
+checking for sys/types.h... (cached) yes
+checking for stdio.h... (cached) yes
+checking for stdlib.h... (cached) yes
+checking for stddef.h... yes
+checking for stdarg.h... yes
+checking for malloc.h... yes
+checking for memory.h... yes
+checking for string.h... (cached) yes
+checking for strings.h... (cached) yes
+checking for wchar.h... yes
+checking for inttypes.h... (cached) yes
+checking for stdint.h... (cached) yes
+checking for limits.h... yes
+checking for ctype.h... yes
+checking for math.h... yes
+checking for float.h... yes
+checking for iconv.h... yes
+checking for signal.h... yes
+checking for size_t... yes
+checking how to run the C preprocessor... x86_64-w64-mingw32-gcc -E
+checking for M_PI in math.h... yes
+checking for working alloca.h... no
+checking for alloca... yes
+checking for mprotect... yes
+checking for malloc... yes
+checking for calloc... yes
+checking for realloc... yes
+checking for free... yes
+checking for getenv... yes
+checking for setenv... no
+checking for putenv... yes
+checking for unsetenv... no
+checking for bsearch... yes
+checking for qsort... yes
+checking for abs... yes
+checking for bcopy... no
+checking for memset... yes
+checking for memcmp... yes
+checking for memcpy... yes
+checking for memmove... yes
+checking for wcslen... yes
+checking for wcslcpy... no
+checking for wcslcat... no
+checking for _wcsdup... yes
+checking for wcsdup... yes
+checking for wcsstr... yes
+checking for wcscmp... yes
+checking for wcsncmp... yes
+checking for wcscasecmp... no
+checking for _wcsicmp... yes
+checking for wcsncasecmp... no
+checking for _wcsnicmp... yes
+checking for strlen... yes
+checking for strlcpy... no
+checking for strlcat... no
+checking for _strrev... yes
+checking for _strupr... yes
+checking for _strlwr... yes
+checking for index... no
+checking for rindex... no
+checking for strchr... yes
+checking for strrchr... yes
+checking for strstr... yes
+checking for strtok_r... yes
+checking for itoa... yes
+checking for _ltoa... yes
+checking for _uitoa... no
+checking for _ultoa... yes
+checking for strtod... yes
+checking for strtol... yes
+checking for strtoul... yes
+checking for _i64toa... yes
+checking for _ui64toa... yes
+checking for strtoll... yes
+checking for strtoull... yes
+checking for atoi... yes
+checking for atof... yes
+checking for strcmp... yes
+checking for strncmp... yes
+checking for _stricmp... yes
+checking for strcasecmp... yes
+checking for _strnicmp... yes
+checking for strncasecmp... yes
+checking for strcasestr... no
+checking for vsscanf... yes
+checking for vsnprintf... yes
+checking for fopen64... yes
+checking for fseeko... yes
+checking for fseeko64... yes
+checking for sigaction... no
+checking for setjmp... yes
+checking for nanosleep... yes
+checking for sysconf... no
+checking for sysctlbyname... no
+checking for getauxval... no
+checking for elf_aux_info... no
+checking for poll... no
+checking for _Exit... yes
+checking for pow in -lm... yes
+checking for acos... yes
+checking for acosf... yes
+checking for asin... yes
+checking for asinf... yes
+checking for atan... yes
+checking for atanf... yes
+checking for atan2... yes
+checking for atan2f... yes
+checking for ceil... yes
+checking for ceilf... yes
+checking for copysign... yes
+checking for copysignf... yes
+checking for cos... yes
+checking for cosf... yes
+checking for exp... yes
+checking for expf... yes
+checking for fabs... yes
+checking for fabsf... yes
+checking for floor... yes
+checking for floorf... yes
+checking for trunc... yes
+checking for truncf... yes
+checking for fmod... yes
+checking for fmodf... yes
+checking for log... yes
+checking for logf... yes
+checking for log10... yes
+checking for log10f... yes
+checking for lround... yes
+checking for lroundf... yes
+checking for pow... yes
+checking for powf... yes
+checking for round... yes
+checking for roundf... yes
+checking for scalbn... yes
+checking for scalbnf... yes
+checking for sin... yes
+checking for sinf... yes
+checking for sqrt... yes
+checking for sqrtf... yes
+checking for tan... yes
+checking for tanf... yes
+checking for struct sigaction.sa_sigaction... no
+checking for libunwind.h... no
+checking for GCC builtin atomic operations... yes
+checking for GCC -mmmx option... yes
+checking for GCC -m3dnow option... yes
+checking for GCC -msse option... yes
+checking for GCC -msse2 option... yes
+checking for GCC -msse3 option... yes
+checking for immintrin.h... yes
+checking for Altivec with GCC altivec.h and -maltivec option... no
+checking for Altivec with GCC -maltivec option... no
+checking for Altivec with GCC altivec.h and -faltivec option... no
+checking for Altivec with GCC -faltivec option... no
+checking for GCC -mlsx option... no
+checking for lsxintrin.h... no
+checking for GCC -mlasx option... no
+checking for lasxintrin.h... no
+checking for GCC -Wall option... yes
+checking for necessary GCC -Wno-multichar option... no
+checking for GCC -Wunused-local-typedefs option... yes
+checking for GCC -fno-strict-aliasing option... yes
+checking for GCC -gdwarf-4 option... yes
+checking for GCC -Wdeclaration-after-statement option... yes
+checking Windows compiler... yes
+checking Windows CE... no
+checking for tpcshrd.h... yes
+checking for roapi.h... yes
+checking for shellscalingapi.h... yes
+checking for EGL support... yes
+checking for OpenGL ES v2 headers... yes
+checking for d3d9.h... yes
+checking for d3d11_1.h... yes
+checking for d3d12 Windows SDK version... yes
+checking for ddraw.h... yes
+checking for dsound.h... yes
+checking for dinput.h... yes
+checking for dxgi.h... yes
+checking for xinput.h... yes
+checking for windows.gaming.input.h... yes
+checking for mmdeviceapi.h... yes
+checking for audioclient.h... yes
+checking for hidapi joystick support... yes
+checking for sensorsapi.h... yes
+checking for main in -lmingw32... yes
+checking whether to install sdl2-config... yes
+configure: creating ./config.status
+config.status: creating Makefile
+config.status: creating sdl2-config
+config.status: creating sdl2-config.cmake
+config.status: creating sdl2-config-version.cmake
+config.status: creating SDL2.spec
+config.status: creating sdl2.pc
+config.status: creating include/SDL_config.h
+config.status: include/SDL_config.h is unchanged
+config.status: executing libtool commands
+config.status: executing sdl2_config commands
+config.status: executing summary commands
+SDL2 Configure Summary:
+Building Shared Libraries
+Building Static Libraries
+Enabled modules : atomic audio video render events joystick haptic hidapi sensor power filesystem threads timers file misc locale loadso cpuinfo assembly
+Assembly Math   : mmx 3dnow sse sse2 sse3
+Audio drivers   : disk dummy winmm directsound wasapi
+Video drivers   : dummy offscreen opengl opengl_es1 opengl_es2 vulkan d3d9 d3d11 d3d12
+Input drivers   :
+Enable virtual joystick APIs : YES
+Using libsamplerate : NO
+Using libudev       : NO
+Using dbus          : NO
+Using ime           : NO
+Using ibus          : NO
+Using fcitx         : NO
+make[1]: 进入目录“/d/study/permafrost-engine-master/deps/SDL2/build”
+/bin/sh ../build-scripts//updaterev.sh --vendor ""
+  CC     build/SDL_hidapi_wii.lo
+  CC     build/SDL_hidapi_xbox360.lo
+  CC     build/SDL_hidapi_xbox360w.lo
+  CC     build/SDL_hidapi_xboxone.lo
+  CC     build/SDL_hidapijoystick.lo
+  CC     build/SDL_hid.lo
+  CC     build/SDL_immdevice.lo
+  CC     build/SDL_windows.lo
+  CC     build/SDL_xinput.lo
+  CC     build/SDL_sysurl.lo
+  CC     build/SDL_syslocale.lo
+  CC     build/SDL_windowsclipboard.lo
+  CC     build/SDL_windowsevents.lo
+  CC     build/SDL_windowsframebuffer.lo
+  CC     build/SDL_windowskeyboard.lo
+  CC     build/SDL_windowsmessagebox.lo
+  CC     build/SDL_windowsmodes.lo
+  CC     build/SDL_windowsmouse.lo
+  CC     build/SDL_windowsopengl.lo
+  CC     build/SDL_windowsopengles.lo
+  CC     build/SDL_windowsshape.lo
+  CC     build/SDL_windowsvideo.lo
+  CC     build/SDL_windowsvulkan.lo
+  CC     build/SDL_windowswindow.lo
+  CC     build/SDL_winmm.lo
+  CC     build/SDL_directsound.lo
+  CC     build/SDL_wasapi.lo
+  CC     build/SDL_wasapi_win32.lo
+  CC     build/SDL_dinputjoystick.lo
+  CC     build/SDL_rawinputjoystick.lo
+  CC     build/SDL_windows_gaming_input.lo
+  CC     build/SDL_windowsjoystick.lo
+  CC     build/SDL_xinputjoystick.lo
+  CC     build/SDL_dinputhaptic.lo
+  CC     build/SDL_windowshaptic.lo
+  CC     build/SDL_xinputhaptic.lo
+  CC     build/SDL_windowssensor.lo
+  CC     build/SDL_syspower.lo
+  CC     build/SDL_sysfilesystem.lo
+  CC     build/SDL_syscond_cv.lo
+  CC     build/SDL_sysmutex.lo
+  CC     build/SDL_syssem.lo
+  CC     build/SDL_systhread.lo
+  CC     build/SDL_systls.lo
+  CC     build/SDL_syscond.lo
+  CC     build/SDL_systimer.lo
+  CC     build/SDL_sysloadso.lo
+  CC     build/SDL_virtualjoystick.lo
+  RC     build/version.lo
+  LTLINK build/libSDL2.la
+  CC     build/SDL_windows_main.lo
+  LTLINK build/libSDL2main.la
+  CC     build/SDL_test_assert.lo
+  CC     build/SDL_test_common.lo
+  CC     build/SDL_test_compare.lo
+  CC     build/SDL_test_crc32.lo
+  CC     build/SDL_test_font.lo
+  CC     build/SDL_test_fuzzer.lo
+  CC     build/SDL_test_harness.lo
+  CC     build/SDL_test_imageBlit.lo
+  CC     build/SDL_test_imageBlitBlend.lo
+  CC     build/SDL_test_imageFace.lo
+  CC     build/SDL_test_imagePrimitives.lo
+  CC     build/SDL_test_imagePrimitivesBlend.lo
+  CC     build/SDL_test_log.lo
+  CC     build/SDL_test_md5.lo
+  CC     build/SDL_test_memory.lo
+  CC     build/SDL_test_random.lo
+  LTLINK build/libSDL2_test.la
+make[1]: 离开目录“/d/study/permafrost-engine-master/deps/SDL2/build”
+cp ./deps/SDL2/build/build/.libs/SDL2.dll lib/SDL2.dll
+mkdir -p ./deps/Python/build
+cd ./deps/Python/build \
+&& ../configure \
+	--host=x86_64-w64-mingw32 \
+	--build=x86_64-pc-linux-gnu \
+	--enable-shared \
+	--disable-ipv6 \
+	--without-threads \
+	--without-signal-module \
+	 \
+&& cp ./pyconfig.h ../Include/. \
+&& make libpython2.7.dll CFLAGS=""-D__USE_MINGW_ANSI_STDIO=1 -D__MINGW32__" " LDFLAGS=""-mcrtdll=ucrt -lucrt" " INSTSONAME=libpython2.7.so.1.0
+configure: loading site script /etc/config.site
+checking build system type... x86_64-pc-linux-gnu
+checking host system type... x86_64-w64-mingw32
+checking for python2.7... no
+checking for python3... python3
+checking for python interpreter for cross build... 

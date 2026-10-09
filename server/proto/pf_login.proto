@@ -1,0 +1,61 @@
+syntax = "proto3";
+package pf.net;
+option optimize_for = LITE_RUNTIME;
+
+import "pf_common.proto";
+
+message RegReq {
+  string username = 1;
+  string password = 2;
+}
+
+message RegRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  int64 uid = 3;
+}
+
+message LoginReq {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  string token = 3;
+  int64 uid = 4;
+  string username = 5;
+}
+
+message HeartbeatReq {
+  string token = 1;
+}
+
+message HeartbeatRsp {
+  bool ok = 1;
+}
+
+message ProfileReq {
+  string token = 1;
+}
+
+message ProfileRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  int64 uid = 3;
+  string username = 4;
+  int64 created_at = 5;
+  int64 last_login = 6;
+}
+
+message TokenValidateReq {
+  string token = 1;
+}
+
+message TokenValidateRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  int64 uid = 3;
+  string username = 4;
+}

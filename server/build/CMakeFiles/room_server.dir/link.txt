@@ -1,0 +1,3 @@
+C:\msys64\mingw64\bin\cmake.exe -E rm -f CMakeFiles\room_server.dir/objects.a
+C:\msys64\mingw64\bin\ar.exe qc CMakeFiles\room_server.dir/objects.a @CMakeFiles\room_server.dir\objects1.rsp
+C:\msys64\mingw64\bin\c++.exe -O3 -DNDEBUG -Wl,--whole-archive CMakeFiles\room_server.dir/objects.a -Wl,--no-whole-archive -o room_server.exe -Wl,--out-implib,libroom_server.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\room_server.dir\linkLibs.rsp

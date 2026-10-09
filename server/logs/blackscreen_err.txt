@@ -1,0 +1,14 @@
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 1 (bound to GL_ARRAY_BUFFER_ARB, usage hint is GL_STATIC_DRAW) will use VIDEO memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 2 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 2 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 3 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 3 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 5 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 5 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 6 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 6 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 9 (bound to GL_ARRAY_BUFFER_ARB, usage hint is GL_STATIC_DRAW) will use VIDEO memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 10 (bound to GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING_ARB (0), and GL_ARRAY_BUFFER_ARB, usage hint is GL_STATIC_DRAW) will use VIDEO memory as the source for buffer object operations.
+[script] S_RunFile path=./scripts/rts/match_online.py
+[script] PyRun_File begin
+[script] PyRun_File done ok=1

@@ -1,0 +1,89 @@
+syntax = "proto3";
+package pf.net;
+option optimize_for = LITE_RUNTIME;
+
+/* Shared enums 鈥?keep in sync with pf_proto.h numeric values where noted. */
+
+enum ErrCode {
+  ERR_OK = 0;
+  ERR_UNAUTHORIZED = 1;
+  ERR_NOT_FOUND = 2;
+  ERR_FULL = 3;
+  ERR_NOT_OWNER = 4;
+  ERR_BAD_STATE = 5;
+  ERR_ALREADY_IN_ROOM = 6;
+  ERR_EXISTS = 7;
+  ERR_BAD_PASS = 8;
+  ERR_INTERNAL = 9;
+  ERR_BAD_ARGS = 10;
+}
+
+enum RoomState {
+  ROOM_OPEN = 0;
+  ROOM_STARTING = 1;
+  ROOM_IN_MATCH = 2;
+  ROOM_CLOSED = 3;
+}
+
+/* Wire envelope: TCP/UDP frame header (not protobuf) + body = one of these msgs.
+ * Header: magic=0x50465042 'PFPB', ver=1, msg_id(u16), payload_len(u32), payload.
+ */
+
+enum MsgId {
+  MSG_NONE = 0;
+
+  /* Login */
+  MSG_REG_REQ = 1;
+  MSG_REG_RSP = 2;
+  MSG_LOGIN_REQ = 3;
+  MSG_LOGIN_RSP = 4;
+  MSG_HEARTBEAT_REQ = 5;
+  MSG_HEARTBEAT_RSP = 6;
+  MSG_PROFILE_REQ = 7;
+  MSG_PROFILE_RSP = 8;
+  MSG_TOKEN_VALIDATE_REQ = 9;
+  MSG_TOKEN_VALIDATE_RSP = 10;
+
+  /* Room control (TCP) */
+  MSG_AUTH_REQ = 20;
+  MSG_AUTH_RSP = 21;
+  MSG_ROOM_LIST_REQ = 22;
+  MSG_ROOM_LIST_RSP = 23;
+  MSG_ROOM_QUERY_REQ = 24;
+  MSG_ROOM_QUERY_RSP = 25;
+  MSG_ROOM_CREATE_REQ = 26;
+  MSG_ROOM_CREATE_RSP = 27;
+  MSG_ROOM_DELETE_REQ = 28;
+  MSG_ROOM_DELETE_RSP = 29;
+  MSG_ROOM_DELETE_NTF = 30;
+  MSG_ROOM_JOIN_REQ = 31;
+  MSG_ROOM_JOIN_RSP = 32;
+  MSG_ROOM_LEAVE_REQ = 33;
+  MSG_ROOM_LEAVE_RSP = 34;
+  MSG_ROOM_UPDATE = 35;
+  MSG_MATCH_START_REQ = 36;
+  MSG_MATCH_START_NTF = 37;
+  MSG_KCP_READY = 38;
+
+  /* Lockstep over UDP/KCP */
+  MSG_CMD_FRAME = 50;
+  MSG_HASH = 51;
+  MSG_DESYNC = 52;
+}
+
+message PlayerInfo {
+  int64 uid = 1;
+  string username = 2;
+  int32 slot = 3;
+}
+
+message RoomInfo {
+  uint32 room_id = 1;
+  string name = 2;
+  string map_path = 3;
+  int32 max_players = 4;
+  int32 player_count = 5;
+  int64 owner_uid = 6;
+  RoomState state = 7;
+  repeated PlayerInfo players = 8;
+}

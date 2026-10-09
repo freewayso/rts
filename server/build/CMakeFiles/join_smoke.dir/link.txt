@@ -1,0 +1,3 @@
+C:\msys64\mingw64\bin\cmake.exe -E rm -f CMakeFiles\join_smoke.dir/objects.a
+C:\msys64\mingw64\bin\ar.exe qc CMakeFiles\join_smoke.dir/objects.a @CMakeFiles\join_smoke.dir\objects1.rsp
+C:\msys64\mingw64\bin\c++.exe -O3 -DNDEBUG -Wl,--whole-archive CMakeFiles\join_smoke.dir/objects.a -Wl,--no-whole-archive -o join_smoke.exe -Wl,--out-implib,libjoin_smoke.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\join_smoke.dir\linkLibs.rsp

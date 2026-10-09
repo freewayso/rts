@@ -1,0 +1,133 @@
+syntax = "proto3";
+package pf.net;
+option optimize_for = LITE_RUNTIME;
+
+import "pf_common.proto";
+
+message AuthReq {
+  string token = 1;
+  int64 uid = 2;          /* provisional until server validates via login */
+  string username = 3;
+}
+
+message AuthRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  int64 uid = 3;
+  string username = 4;
+}
+
+message RoomListReq {
+  bool open_only = 1;     /* default true on server if unset treated as open-only */
+}
+
+message RoomListRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  repeated RoomInfo rooms = 3;
+}
+
+message RoomQueryReq {
+  uint32 room_id = 1;
+}
+
+message RoomQueryRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  RoomInfo room = 3;
+}
+
+message RoomCreateReq {
+  string name = 1;
+  string map_path = 2;
+  int32 max_players = 3;
+}
+
+message RoomCreateRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  RoomInfo room = 3;
+}
+
+message RoomDeleteReq {
+  uint32 room_id = 1;
+}
+
+message RoomDeleteRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+}
+
+message RoomDeleteNtf {
+  uint32 room_id = 1;
+  string reason = 2;
+}
+
+message RoomJoinReq {
+  uint32 room_id = 1;
+}
+
+message RoomJoinRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+  RoomInfo room = 3;
+}
+
+message RoomLeaveReq {
+  uint32 room_id = 1;
+}
+
+message RoomLeaveRsp {
+  bool ok = 1;
+  ErrCode err = 2;
+}
+
+message RoomUpdate {
+  RoomInfo room = 1;
+}
+
+message MatchStartReq {
+  uint64 rng_seed = 1;
+  uint32 sim_hz = 2;
+  uint32 command_delay = 3;
+}
+
+message MatchStartNtf {
+  bool ok = 1;
+  ErrCode err = 2;
+  uint32 room_id = 3;
+  uint64 rng_seed = 4;
+  uint32 sim_hz = 5;
+  uint32 command_delay = 6;
+  string map_path = 7;
+  int32 local_slot = 8;
+  uint32 kcp_conv = 9;
+  uint32 udp_port = 10;
+}
+
+message KcpReady {
+  uint32 room_id = 1;
+}
+
+/* UDP/KCP lockstep payloads */
+message CmdFrame {
+  uint32 room_id = 1;
+  uint32 kcp_conv = 2;
+  uint32 tick = 3;
+  uint32 player_id = 4;
+  bytes payload = 5;      /* serialized ls_player_frame or opaque cmds */
+}
+
+message HashReport {
+  uint32 room_id = 1;
+  uint32 kcp_conv = 2;
+  uint32 tick = 3;
+  uint32 player_id = 4;
+  uint64 hash = 5;
+}
+
+message DesyncNtf {
+  uint32 room_id = 1;
+  uint32 tick = 2;
+  string detail = 3;
+}

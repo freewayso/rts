@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/study/permafrost-engine-master/server/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

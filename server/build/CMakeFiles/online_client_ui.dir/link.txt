@@ -1,0 +1,3 @@
+C:\msys64\mingw64\bin\cmake.exe -E rm -f CMakeFiles\online_client_ui.dir/objects.a
+C:\msys64\mingw64\bin\ar.exe qc CMakeFiles\online_client_ui.dir/objects.a @CMakeFiles\online_client_ui.dir\objects1.rsp
+C:\msys64\mingw64\bin\c++.exe -O3 -DNDEBUG -mwindows -Wl,--whole-archive CMakeFiles\online_client_ui.dir/objects.a -Wl,--no-whole-archive -o online_client_ui.exe -Wl,--out-implib,libonline_client_ui.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\online_client_ui.dir\linkLibs.rsp

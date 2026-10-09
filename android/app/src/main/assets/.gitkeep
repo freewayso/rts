@@ -1,0 +1,2 @@
+# Placeholder so src/main/assets exists; engine assets come from ../../assets
+# and shaders_es are synced by the syncShadersEs Gradle task.

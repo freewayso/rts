@@ -1,0 +1,3624 @@
+/*
+ *  This file is part of Permafrost Engine. 
+ *  Copyright (C) 2018-2026 Eduard Permyakov 
+ *
+ *  Permafrost Engine is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  Permafrost Engine is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * 
+ *  Linking this software statically or dynamically with other modules is making 
+ *  a combined work based on this software. Thus, the terms and conditions of 
+ *  the GNU General Public License cover the whole combination. 
+ *  
+ *  As a special exception, the copyright holders of Permafrost Engine give 
+ *  you permission to link Permafrost Engine with independent modules to produce 
+ *  an executable, regardless of the license terms of these independent 
+ *  modules, and to copy and distribute the resulting executable under 
+ *  terms of your choice, provided that you also meet, for each linked 
+ *  independent module, the terms and conditions of the license of that 
+ *  module. An independent module is a module which is not derived from 
+ *  or based on Permafrost Engine. If you modify Permafrost Engine, you may 
+ *  extend this exception to your version of Permafrost Engine, but you are not 
+ *  obliged to do so. If you do not wish to do so, delete this exception 
+ *  statement from your version.
+ *
+ */
+
+#define MEM_FILE_SYS MEM_SYS_GAME
+#define MEM_FILE_SUB MEM_SUB_GAME_COMBAT
+
+#include "combat.h"
+#include "game_private.h"
+#include "movement.h"
+#include "formation.h"
+#include "building.h"
+#include "fog_of_war.h"
+#include "position.h"
+#include "garrison.h"
+#include "public/game.h"
+#include "../ui.h"
+#include "../event.h"
+#include "../entity.h"
+#include "../main.h"
+#include "../perf.h"
+#include "../settings.h"
+#include "../sched.h"
+#include "../task.h"
+#include "../asset_load.h"
+#include "../sprite.h"
+#include "../phys/public/collision.h"
+#include "../render/public/render.h"
+#include "../render/public/render_ctrl.h"
+#include "../phys/public/phys.h"
+#include "../lib/public/khash.h"
+#include "../lib/public/attr.h"
+#include "../lib/public/pf_string.h"
+#include "../mem.h"
+#include "../lib/public/queue.h"
+#include "../lib/public/string_intern.h"
+#include "../lockstep/public/lockstep.h"
+
+#include <assert.h>
+#include <float.h>
+#include <SDL.h>
+
+#undef PF_MALLOC
+#undef PF_CALLOC
+#undef PF_REALLOC
+#define PF_MALLOC(_n)       PF_MALLOC_TAGGED((_n), MEM_SYS_GAME, MEM_SUB_GAME_COMBAT)
+#define PF_CALLOC(_c, _n)   PF_CALLOC_TAGGED((_c), (_n), MEM_SYS_GAME, MEM_SUB_GAME_COMBAT)
+#define PF_REALLOC(_p, _n)  PF_REALLOC_TAGGED((_p), (_n), MEM_SYS_GAME, MEM_SUB_GAME_COMBAT)
+
+
+#define TARGET_ACQUISITION_RANGE     (220.0f)
+#define PROJECTILE_DEFAULT_SPEED     (100.0f)
+#define EPSILON                      (1.0f/1024)
+#define DEFAULT_ATTACK_PERIOD        (4.0f/3.0f)
+#define COMBAT_FIRE_FACING_TOLERANCE (15.0f)
+#define MAX(a, b)                    ((a) > (b) ? (a) : (b))
+#define MIN(a, b)                    ((a) < (b) ? (a) : (b))
+#define ARR_SIZE(a)                  (sizeof(a)/sizeof(a[0]))
+#define X_BINS_PER_CHUNK             (8)
+#define Z_BINS_PER_CHUNK             (8)
+#define MAX_COMBAT_TASKS             (64)
+#define DEFAULT_CORPSE_DURATION_SECS (30)
+
+#define CHK_TRUE_RET(_pred)         \
+    do{                             \
+        if(!(_pred))                \
+            return false;           \
+    }while(0)
+
+KHASH_MAP_INIT_INT(aabb, struct aabb)
+
+/*
+ *                    Start
+ *                      |
+ *                      V
+ *(enter atk range)+--[STATE_NOT_IN_COMBAT]<---------------------------+
+ **attack begins*  |    |(enter acquire but not attack range)          |
+ *                 |    V                                              |
+ *                 |  [STATE_MOVING_TO_TARGET]<-+                      |
+ *                 |    |(enter attack range)   |(leave attack range)  |(target dies)
+ *                 |    |*attack begins*        |*attack ends*         |*attack ends*
+ *                 |    |              +--------+----------------------+
+ *                 |    V              |
+ *                 +->[STATE_TURNING_TO_TARGET]<--+<---------------------+
+ *                      |(target alive)           |                      |
+ *                      |                         |                      |
+ *                      V                         |                      |
+ *                    [STATE_CAN_ATTACK]          |                      |
+ *                      |                         |                      |
+ *                      |(facing target)          |                      |
+ *                      |                         |                      |
+ *                 +----+                         |                      |
+ *                 |    |                         |                      |
+ *                 |    |(animated)               |                      |
+ *                 |    V                         |(anim cycle finishes) |(attack time elapsed)
+ *   (not animated)|  [STATE_ATTACK_ANIM_PLAYING]-+                      |
+ *                 |                                                     |
+ *                 +->[STATE_ATTACKING]----------------------------------+
+ * 
+ * From any of the states, an entity can move to the [STATE_DEATH_ANIM_PLAYING] 
+ * state upon receiving a fatal hit. At the next EVENT_ANIM_CYCLE_FINISHED
+ * event, the entity is reaped.
+ */
+
+struct combatstats{
+    int   max_hp;
+    int   base_dmg;         /* The base damage per hit */
+    float base_armour_pc;   /* Percentage of damage blocked. Valid range: [0.0 - 1.0] */
+    float attack_range;
+};
+
+struct combatstate{
+    struct combatstats stats;
+    int                current_hp;
+    enum combat_stance stance;
+    enum{
+        STATE_NOT_IN_COMBAT,
+        STATE_MOVING_TO_TARGET,
+        STATE_MOVING_TO_TARGET_LOCKED,
+        STATE_CAN_ATTACK,
+        STATE_ATTACK_ANIM_PLAYING,
+        STATE_DEATH_ANIM_PLAYING,
+        STATE_ATTACKING,
+        STATE_TURNING_TO_TARGET,
+    }state;
+    /* Set between a sent EVENT_ATTACK_START and its matching EVENT_ATTACK_END so
+     * that the two are always emitted as a pair; clients may assert the pairing.
+     */
+    bool               attack_notified;
+    bool               sticky;
+    uint32_t           target_uid;
+    /* If the target gained a target while moving, save and restore
+     * its' intial move command once it finishes combat. */
+    bool               move_cmd_interrupted;
+    bool               move_cmd_attacking;
+    vec2_t             move_cmd_xz;
+    uint32_t           attack_start_tick;
+    /* only used by ranged entities */
+    struct proj_desc      pd;
+    struct proj_fire_desc fd;
+    /* Optional model to be displayed after an entity's death */
+    const char        *corpse_dir;
+    const char        *corpse_pfobj;
+    vec3_t             corpse_scale;
+};
+
+struct combat_work_in{
+    uint32_t ent_uid;
+};
+
+enum combat_action{
+    COMBAT_ACTION_NONE,
+    COMBAT_ACTION_TARGET_ENEMY,
+    COMBAT_ACTION_STOP_COMBAT,
+    COMBAT_ACTION_TURN_TO_TARGET,
+    COMBAT_ACTION_STOP_MOVEMENT,
+    COMBAT_ACTION_MOVE_IN_RANGE,
+    COMBAT_ACTION_MOVE_IN_RANGE_IF_STILL,
+    COMBAT_ACTION_ANIMATED_ATTACK,
+    COMBAT_ACTION_ATTACK_IF_STILL,
+    COMBAT_ACTION_TRYHIT
+};
+
+struct combat_work_out{
+    uint32_t           ent_uid;
+    struct combatstate next_state;
+    bool               notify_attack_end;
+    enum combat_action action;
+    struct attr        action_args[2];
+};
+
+struct combat_task_arg{
+    size_t begin_idx;
+    size_t end_idx;
+};
+
+/* The substet of the gamestate necessary
+ * for deriving the next combat state for 
+ * each entity.
+ */
+struct combat_gamestate{
+    uint16_t               factions;
+    uint16_t               player_factions;
+    bool                   fog_enabled;
+    khash_t(id)           *flags;
+    khash_t(pos)          *positions;
+    bg_ent_t              *postree;
+    void                  *transforms;
+    khash_t(range)        *sel_radiuses;
+    khash_t(id)           *faction_ids;
+    enum diplomacy_state (*diptable)[MAX_FACTIONS];
+    void                  *buildstate;
+    khash_t(aabb)         *aabbs;
+    uint32_t              *fog_state;
+};
+
+struct combat_work{
+    struct memstack         mem;
+    struct combat_gamestate gamestate;
+    struct combat_work_in  *in;
+    struct combat_work_out *out;
+    size_t                  nwork;
+    size_t                  ntasks;
+    uint32_t                tids[MAX_COMBAT_TASKS];
+    struct future           futures[MAX_COMBAT_TASKS];
+};
+
+enum combat_cmd_type{
+    COMBAT_CMD_ADD,
+    COMBAT_CMD_REMOVE,
+    COMBAT_CMD_ADD_REF,
+    COMBAT_CMD_REMOVE_REF,
+    COMBAT_CMD_UPDATE_REF,
+    COMBAT_CMD_TRYHIT,
+    COMBAT_CMD_ATTACK_UNIT,
+    COMBAT_CMD_STOP_ATTACK,
+    COMBAT_CMD_SET_STANCE,
+    COMBAT_CMD_SET_CURRENT_HP,
+    COMBAT_CMD_SET_BASE_ARMOUR,
+    COMBAT_CMD_SET_BASE_DAMAGE,
+    COMBAT_CMD_SET_MAX_HP,
+    COMBAT_CMD_SET_RANGE,
+    COMBAT_CMD_CLEAR_SAVED_MOVE_CMD,
+    COMBAT_CMD_ADD_TIME_DELTA,
+    COMBAT_CMD_SET_PROJ_DESC,
+    COMBAT_CMD_SET_PROJ_FIRE_DESC,
+    COMBAT_CMD_SET_CORPSE_MODEL,
+    COMBAT_CMD_PROJ_HIT
+};
+
+struct combat_cmd{
+    enum combat_cmd_type type;
+    struct attr          args[4];
+};
+
+struct corpse{
+    uint32_t    uid;
+    uint32_t    secs_left;
+    const char *dir;
+    const char *pfobj;
+};
+
+KHASH_MAP_INIT_INT(state, struct combatstate)
+
+QUEUE_TYPE(cmd, struct combat_cmd)
+QUEUE_IMPL(static, cmd, struct combat_cmd)
+
+VEC_TYPE(corpse, struct corpse);
+VEC_IMPL(static, corpse, struct corpse);
+
+static void combat_push_cmd(struct combat_cmd cmd);
+static void on_attack_anim_tick(void *user, void *event);
+static void on_death_anim_finish(void *user, void *event);
+static void do_stop_attack(uint32_t uid);
+static bool entity_dead(uint32_t uid);
+static bool garrisoned(uint32_t uid);
+static void combat_notify_attack_start(uint32_t uid, struct combatstate *cs);
+static void combat_notify_attack_end(uint32_t uid, struct combatstate *cs);
+static struct combat_cmd *snoop_most_recent_command(enum combat_cmd_type type, void *arg,
+                                                    bool (*pred)(void*, struct combat_cmd*));
+static bool uids_match(void *arg, struct combat_cmd *cmd);
+static void combat_tick(void *user, void *event);
+
+/*****************************************************************************/
+/* STATIC VARIABLES                                                          */
+/*****************************************************************************/
+
+static const char *s_name_for_state[] = {
+    [STATE_NOT_IN_COMBAT]           = "NOT_IN_COMBAT",
+    [STATE_MOVING_TO_TARGET]        = "MOVING_TO_TARGET",
+    [STATE_MOVING_TO_TARGET_LOCKED] = "MOVING_TO_TARGET_LOCKED",
+    [STATE_CAN_ATTACK]              = "STATE_CAN_ATTACK",
+    [STATE_ATTACK_ANIM_PLAYING]     = "ATTACK_ANIM_PLAYING",
+    [STATE_DEATH_ANIM_PLAYING]      = "DEATH_ANIM_PLAYING",
+    [STATE_ATTACKING]               = "ATTACKING",
+    [STATE_TURNING_TO_TARGET]       = "TURNING_TO_TARGET",
+};
+
+static khash_t(state)    *s_entity_state_table;
+/* For saving/restoring state */
+static vec_entity_t       s_dying_ents;
+static const struct map  *s_map;
+/* How many units of a faction currently currently occupy that bin.
+ * For quickly finding that there are no enemy units nearby */
+static uint16_t          *s_fac_refcnts[MAX_FACTIONS];
+
+static struct combat_work s_combat_work;
+static queue_cmd_t        s_combat_commands;
+static unsigned long      s_last_tick;
+static enum combat_hz     s_combat_hz = COMBAT_HZ_1;
+static bool               s_combat_hz_dirty = false;
+
+static khash_t(stridx)   *s_stridx;
+static mp_strbuff_t       s_stringpool;
+static vec_corpse_t       s_corpses;
+
+/*****************************************************************************/
+/* STATIC FUNCTIONS                                                          */
+/*****************************************************************************/
+
+/* The returned pointer is guaranteed to be valid to write to for
+ * so long as we don't add anything to the table. At that point, there
+ * is a case that a 'realloc' might take place. */
+static struct combatstate *combatstate_get(uint32_t uid)
+{
+    khiter_t k = kh_get(state, s_entity_state_table, uid);
+    if(k == kh_end(s_entity_state_table))
+        return NULL;
+
+    return &kh_value(s_entity_state_table, k);
+}
+
+static void combatstate_set(uint32_t uid, const struct combatstate *cs)
+{
+    int ret;
+    khiter_t k = kh_put(state, s_entity_state_table, uid, &ret);
+    assert(ret != -1 && ret != 0);
+    kh_value(s_entity_state_table, k) = *cs;
+}
+
+static void combatstate_remove(uint32_t uid)
+{
+    khiter_t k = kh_get(state, s_entity_state_table, uid);
+    assert(k != kh_end(s_entity_state_table));
+    kh_del(state, s_entity_state_table, k);
+}
+
+static bool entities_equal(uint32_t *a, uint32_t *b)
+{
+    return ((*a) == (*b));
+}
+
+static void combat_dying_remove(uint32_t uid)
+{
+    int idx = vec_entity_indexof(&s_dying_ents, uid, entities_equal);
+    if(idx == -1)
+        return;
+    vec_entity_del(&s_dying_ents, idx);
+}
+
+static struct proj_desc combat_default_proj(void)
+{
+    return (struct proj_desc){
+        .basedir = pf_strdup("assets/models/bow_arrow"),
+        .pfobj = pf_strdup("arrow.pfobj"),
+        .scale = (vec3_t){12.0, 12.0, 12.0},
+        .speed = PROJECTILE_DEFAULT_SPEED,
+    };
+}
+
+static struct proj_fire_desc combat_default_fire(void)
+{
+    return (struct proj_fire_desc){
+        .frame_offset = 0,
+        .fire_mode = FIRE_MODE_LOW,
+        .bone_name = {0},
+        .offset = (vec3_t){0},
+    };
+}
+
+static bool enemies(uint32_t a, uint32_t b)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    int faction_a = G_GetFactionIDFrom(gs->faction_ids, a);
+    int faction_b = G_GetFactionIDFrom(gs->faction_ids, b);
+    if(faction_a == faction_b)
+        return false;
+
+    enum diplomacy_state ds;
+    bool result = G_GetDiplomacyStateFrom(gs->diptable, faction_a, faction_b, &ds);
+
+    assert(result);
+    return (ds == DIPLOMACY_STATE_WAR);
+}
+
+static bool enemies_in_bin(int faction_id, struct map_resolution binres, struct tile_desc td)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    uint16_t facs = gs->factions;
+
+    size_t x = td.chunk_c * X_BINS_PER_CHUNK + td.tile_c;
+    size_t z = td.chunk_r * Z_BINS_PER_CHUNK + td.tile_r;
+    size_t idx = x * (binres.chunk_w * binres.tile_w) + z;
+
+    for(int i = 0; facs; facs >>= 1, i++) {
+
+        if(!(facs & 0x1))
+            continue;
+        if(i == faction_id)
+            continue;
+
+        enum diplomacy_state ds;
+        G_GetDiplomacyStateFrom(gs->diptable, faction_id, i, &ds);
+        if(ds != DIPLOMACY_STATE_WAR)
+            continue;
+
+        if(s_fac_refcnts[i][idx] > 0)
+            return true;
+    }
+    return false;
+}
+
+static bool maybe_enemy_near(uint32_t uid)
+{
+    PERF_ENTER();
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    const struct combatstate *cs = combatstate_get(uid);
+    vec2_t pos = G_Pos_GetXZFrom(gs->positions, uid);
+    float range = MAX(TARGET_ACQUISITION_RANGE, cs->stats.attack_range);
+    int binlen = MAX(
+        (float)(X_COORDS_PER_TILE * TILES_PER_CHUNK_WIDTH)  / X_BINS_PER_CHUNK,
+        (float)(Z_COORDS_PER_TILE * TILES_PER_CHUNK_HEIGHT) / Z_BINS_PER_CHUNK
+    );
+    int binrange = ceil(range / binlen);
+
+    struct map_resolution mapres;
+    M_GetResolution(s_map, &mapres);
+
+    struct map_resolution binres = (struct map_resolution){
+        mapres.chunk_w, mapres.chunk_h,
+        X_BINS_PER_CHUNK, Z_BINS_PER_CHUNK,
+		mapres.field_w, mapres.field_h
+    };
+
+    struct tile_desc td;
+    bool found = M_Tile_DescForPoint2D(binres, M_GetPos(s_map), pos, &td);
+    assert(found);
+
+    size_t binx = td.chunk_c * X_COORDS_PER_TILE + td.tile_c;
+    size_t binz = td.chunk_r * Z_COORDS_PER_TILE + td.tile_r;
+
+    for(int dr = -binrange; dr <= binrange; dr++) {
+    for(int dc = -binrange; dc <= binrange; dc++) {
+
+        struct tile_desc bin = td;
+        if(!M_Tile_RelativeDesc(binres, &bin, dc, dr))
+            continue;
+        int faction_id = G_GetFactionIDFrom(gs->faction_ids, uid);
+        if(enemies_in_bin(faction_id, binres, bin))
+            PERF_RETURN(true);
+    }}
+    PERF_RETURN(false);
+}
+
+static void entity_move_in_range(uint32_t uid, uint32_t target)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    const struct combatstate *cs = combatstate_get(uid);
+    assert(cs->stance != COMBAT_STANCE_HOLD_POSITION);
+
+    if(cs->stats.attack_range == 0.0f) {
+        G_Move_SetSurroundEntity(uid, target);
+    }else{
+        if(M_NavLocationsReachable(s_map, Entity_NavLayer(uid), 
+            G_Pos_GetXZFrom(gs->positions, uid), G_Pos_GetXZFrom(gs->positions, target))) {
+
+            G_Move_SetSurroundEntity(uid, target);
+        }else{
+            G_Move_SetEnterRange(uid, target, cs->stats.attack_range);
+        }
+    }
+}
+
+static void current_obb_from_gamestate(uint32_t uid, struct obb *out)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+
+    vec3_t pos = G_Pos_GetFrom(gs->positions, uid);
+    vec3_t scale = Entity_GetScaleFrom(gs->transforms, uid);
+    quat_t rot = Entity_GetRotFrom(gs->transforms, uid);
+
+    mat4x4_t model;
+    Entity_ModelMatrixFrom(pos, rot, scale, &model);
+
+    khiter_t k = kh_get(aabb, gs->aabbs, uid);
+    assert(k != kh_end(gs->aabbs));
+    struct aabb *aabb = &kh_value(gs->aabbs, k);
+
+    Entity_CurrentOBBFrom(aabb, model, scale, out);
+}
+
+static bool entities_adjacent(uint32_t ent, uint32_t target)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    uint32_t flags = G_FlagsGetFrom(gs->flags, target);
+
+    if(flags & ENTITY_FLAG_MOVABLE) {
+
+        vec2_t ent_pos = G_Pos_GetXZFrom(gs->positions, ent);
+        vec2_t target_pos = G_Pos_GetXZFrom(gs->positions, target);
+
+        float ent_radius = G_GetSelectionRadiusFrom(gs->sel_radiuses, ent);
+        float target_radius = G_GetSelectionRadiusFrom(gs->sel_radiuses, target);
+
+        return M_NavObjAdjacentToDynamicWith(s_map, ent_pos, ent_radius, 
+            target_pos, target_radius);
+    }else{
+
+        struct obb obb;
+        current_obb_from_gamestate(target, &obb);
+
+        vec2_t ent_pos = G_Pos_GetXZFrom(gs->positions, ent);
+        float ent_radius = G_GetSelectionRadiusFrom(gs->sel_radiuses, ent);
+
+        return M_NavObjAdjacentToStaticWith(s_map, ent_pos, ent_radius, &obb);
+    }
+}
+
+static bool entity_can_attack_melee(uint32_t uid, uint32_t target)
+{
+    return entities_adjacent(uid, target);
+}
+
+static bool entity_can_attack(uint32_t uid, uint32_t target)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    const struct combatstate *cs = combatstate_get(uid);
+    if(cs->stats.attack_range == 0.0f) {
+        return entity_can_attack_melee(uid, target);
+    }
+
+    vec2_t xz_src = G_Pos_GetXZFrom(gs->positions, uid);
+    vec2_t xz_dst = G_Pos_GetXZFrom(gs->positions, target);
+
+    vec2_t delta;
+    PFM_Vec2_Sub(&xz_src, &xz_dst, &delta);
+    return (PFM_Vec2_Len(&delta) <= cs->stats.attack_range);
+}
+
+static bool valid_enemy(uint32_t curr, void *arg)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    uint32_t ent = (uintptr_t)arg;
+    uint32_t ent_flags = G_FlagsGetFrom(gs->flags, ent);
+    uint32_t curr_flags = G_FlagsGetFrom(gs->flags, curr);
+
+    struct combatstate *ent_cs = combatstate_get(ent);
+    assert(ent_cs);
+
+    if(curr == ent)
+        return false;
+    if(!(curr_flags & ENTITY_FLAG_COMBATABLE))
+        return false;
+    if((curr_flags & ENTITY_FLAG_BUILDING) 
+    && !G_Building_IsFoundedFrom(gs->buildstate, curr))
+        return false;
+    if(!enemies(ent, curr))
+        return false;
+    if(!(ent_flags & ENTITY_FLAG_AIR)
+    && (curr_flags & ENTITY_FLAG_AIR)
+    && (ent_cs->stats.attack_range == 0.0f))
+        return false;
+
+    struct combatstate *cs = combatstate_get(curr);
+    assert(cs);
+    if(cs->state == STATE_DEATH_ANIM_PLAYING)
+        return false;
+
+    struct obb obb;
+    current_obb_from_gamestate(curr, &obb);
+
+    uint16_t pmask = gs->player_factions;
+    if(!G_Fog_ObjVisibleFrom(gs->fog_state, gs->fog_enabled, pmask, &obb))
+        return false;
+
+    return true;
+}
+
+static quat_t quat_from_vec(vec2_t dir)
+{
+    assert(PFM_Vec2_Len(&dir) > EPSILON);
+
+    float angle_rad = atan2(dir.z, dir.x) - M_PI/2.0f;
+    return (quat_t) {
+        0.0f, 
+        1.0f * sin(angle_rad / 2.0f),
+        0.0f,
+        cos(angle_rad / 2.0f)
+    };
+}
+
+static quat_t entity_turn_dir(uint32_t uid, uint32_t target)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    vec2_t ent_pos_xz = G_Pos_GetXZFrom(gs->positions, uid);
+    vec2_t tar_pos_xz = G_Pos_GetXZFrom(gs->positions, target);
+
+    vec2_t ent_to_target;
+    PFM_Vec2_Sub(&tar_pos_xz, &ent_pos_xz, &ent_to_target);
+
+    if(PFM_Vec2_Len(&ent_to_target) < EPSILON) {
+        return Entity_GetRotFrom(gs->transforms, uid);
+    }
+
+    PFM_Vec2_Normal(&ent_to_target, &ent_to_target);
+    return quat_from_vec(ent_to_target);
+}
+
+static vec3_t entity_facing_dir(uint32_t uid)
+{
+    /* Recover the horizontal heading from the entity's Y-axis rotation - the inverse of
+     * quat_from_vec, which is how units are turned to face their targets.
+     */
+    quat_t rot = Entity_GetRot(uid);
+    float angle = 2.0f * atan2(rot.y, rot.w);
+    return (vec3_t){ -sin(angle), 0.0f, cos(angle) };
+}
+
+static bool fires_from_formation(uint32_t uid)
+{
+    return (G_FlagsGet(uid) & ENTITY_FLAG_MOVABLE)
+        && (G_Formation_GetForEnt(uid) != NULL_FID);
+}
+
+static bool faces_target(uint32_t uid, uint32_t target)
+{
+    quat_t cur = Entity_GetRot(uid);
+    quat_t want = entity_turn_dir(uid, target);
+    return RAD_TO_DEG(fabs(PFM_Quat_PitchDiff(&cur, &want))) <= COMBAT_FIRE_FACING_TOLERANCE;
+}
+
+static void combat_notify_attack_start(uint32_t uid, struct combatstate *cs)
+{
+    assert(!cs->attack_notified);
+    cs->attack_notified = true;
+    E_Entity_Notify(EVENT_ATTACK_START, uid, NULL, ES_ENGINE);
+}
+
+static void combat_notify_attack_end(uint32_t uid, struct combatstate *cs)
+{
+    assert(cs->attack_notified);
+    cs->attack_notified = false;
+    E_Entity_Notify(EVENT_ATTACK_END, uid, NULL, ES_ENGINE);
+}
+
+static void entity_turn_to_target(uint32_t uid, uint32_t target)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+
+    uint32_t flags = G_FlagsGetFrom(gs->flags, uid);
+
+    /* Formation members hold their ground and fire without leaving the formation. */
+    if(fires_from_formation(uid)) {
+        G_Move_SetCombatFacing(uid, entity_turn_dir(uid, target));
+        cs->state = STATE_TURNING_TO_TARGET;
+        return;
+    }
+
+    if(!cs->move_cmd_interrupted
+    && G_Move_GetDest(uid, &cs->move_cmd_xz, &cs->move_cmd_attacking)) {
+        cs->move_cmd_interrupted = true;
+    }
+    G_Move_Stop(uid);
+
+    if(!(flags & ENTITY_FLAG_MOVABLE)) {
+        cs->state = STATE_CAN_ATTACK;
+        combat_notify_attack_start(uid, cs);
+    }else{
+        quat_t rot = entity_turn_dir(uid, target);
+        G_Move_SetChangeDirection(uid, rot);
+        cs->state = STATE_TURNING_TO_TARGET;
+    }
+}
+
+static void on_disappear_finish(void *arg)
+{
+    uint32_t self = (uintptr_t)arg;
+    uint32_t flags = G_FlagsGet(self);
+    flags |= ENTITY_FLAG_INVISIBLE;
+    G_FlagsSet(self, flags);
+    E_Entity_Notify(EVENT_ENTITY_DISAPPEARED, self, NULL, ES_ENGINE);
+}
+
+static void entity_die(uint32_t uid)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    if(cs) {
+        cs->attack_notified = false;
+        cs->state = STATE_NOT_IN_COMBAT;
+    }
+
+    G_Move_Stop(uid);
+
+    uint32_t flags = G_FlagsGet(uid);
+    if(flags & ENTITY_FLAG_SELECTABLE) {
+        G_Sel_Remove(uid);
+        flags &= ~ENTITY_FLAG_SELECTABLE;
+        G_FlagsSet(uid, flags);
+    }
+
+    E_Entity_Unregister(EVENT_UPDATE_START, uid, on_attack_anim_tick);
+    E_Global_Notify(EVENT_ENTITY_DIED, (void*)((uintptr_t)uid), ES_ENGINE);
+    E_Entity_Notify(EVENT_ENTITY_DEATH, uid, NULL, ES_ENGINE);
+    vec_entity_push(&s_dying_ents, uid);
+
+    /* All units garrisoned inside a 'dead' entity die also. 
+     */
+    if(flags & ENTITY_FLAG_GARRISONABLE) {
+        vec_entity_t garrisoned;
+        vec_entity_init(&garrisoned);
+        G_Garrison_GetUnits(uid, &garrisoned);
+        for(int i = 0; i < vec_size(&garrisoned); i++) {
+            uint32_t unit = vec_AT(&garrisoned, i);
+            E_Global_Notify(EVENT_ENTITY_DIED, (void*)((uintptr_t)unit), ES_ENGINE);
+            E_Entity_Notify(EVENT_ENTITY_DEATH_IMMEDIATE, unit, NULL, ES_ENGINE);
+        }
+        vec_entity_destroy(&garrisoned);
+        G_Garrison_ClearGarrison(uid);
+    }
+
+    if(flags & ENTITY_FLAG_ANIMATED 
+    && !(flags & ENTITY_FLAG_BUILDING)
+    && !(flags & ENTITY_FLAG_WATER)
+    && !(flags & ENTITY_FLAG_AIR)) {
+
+        cs->state = STATE_DEATH_ANIM_PLAYING;
+        E_Entity_Register(EVENT_ANIM_CYCLE_FINISHED, uid, on_death_anim_finish, 
+            (void*)((uintptr_t)uid), G_RUNNING);
+
+    }else{
+
+        khash_t(id) *flags = s_combat_work.gamestate.flags;
+        khiter_t k = kh_get(id, flags, uid);
+        assert(k != kh_end(flags));
+        kh_value(flags, k) = kh_value(flags, k) | ENTITY_FLAG_ZOMBIE;
+
+        G_Zombiefy(uid, false);
+        Entity_DisappearAnimated(uid, s_map, on_disappear_finish, (void*)((uintptr_t)uid));
+    }
+}
+
+static void entity_melee_attack(uint32_t uid, uint32_t target)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    if(entity_dead(target) || garrisoned(target))
+        return;
+
+    struct combatstate *cs = combatstate_get(uid);
+    struct combatstate *target_cs = combatstate_get(cs->target_uid);
+
+    float dmg = cs->stats.base_dmg  * (1.0f - target_cs->stats.base_armour_pc);
+    target_cs->current_hp = MAX(0, target_cs->current_hp - dmg);
+
+    if(target_cs->current_hp == 0 && target_cs->stats.max_hp > 0) {
+        entity_die(target);
+    }
+}
+
+static void entity_ranged_attack(uint32_t uid, uint32_t target, vec3_t proj_pos)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+
+    /* Once the fire frame plays we always loose a projectile. Aim at the target while it
+     * still exists (even while it is dying); if it is already gone, lob a shot in the
+     * direction we are facing - which is where the target was.
+     */
+    vec3_t target_pos;
+    if(G_EntityExists(target)) {
+        target_pos = Entity_CenterPos(target);
+    }else{
+        vec3_t fwd = entity_facing_dir(uid);
+        PFM_Vec3_Scale(&fwd, cs->stats.attack_range, &fwd);
+        PFM_Vec3_Add(&proj_pos, &fwd, &target_pos);
+    }
+
+    float ent_dmg = cs->stats.base_dmg;
+    vec3_t vel;
+    if(!P_Projectile_VelocityForTarget(proj_pos, target_pos, cs->pd.speed,
+        cs->fd.fire_mode, &vel)) {
+        return; /* Degenerate: the target is right on top of the muzzle. */
+    }
+
+    P_Projectile_Add(proj_pos, vel, uid, G_GetFactionIDFrom(gs->faction_ids, uid),
+        ent_dmg, PROJ_ONLY_HIT_COMBATABLE | PROJ_ONLY_HIT_ENEMIES, cs->pd);
+}
+
+static bool garrisoned(uint32_t uid)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    uint32_t flags = G_FlagsGetFrom(gs->flags, uid);
+    return (flags & ENTITY_FLAG_GARRISONED);
+}
+
+static struct result corpse_disappear_task(void *arg)
+{
+    uint32_t uid = (uintptr_t)arg;
+    vec3_t start_pos = G_Pos_Get(uid);
+    uint32_t flags = G_FlagsGet(uid);
+
+    struct obb obb;
+    Entity_CurrentOBB(uid, &obb, true);
+    int height = obb.half_lengths[1] * 2.0f;
+
+    uint32_t newflags = G_FlagsGet(uid);
+    newflags |= ENTITY_FLAG_TRANSLUCENT;
+    G_FlagsSet(uid, newflags);
+
+    const float duration = 1000.0f;
+    uint32_t elapsed = 0;
+    uint32_t start = SDL_GetTicks();
+
+    while(elapsed < duration) {
+    
+        Task_AwaitEvent(EVENT_UPDATE_START, &(int){0});
+        uint32_t curr = SDL_GetTicks();
+
+        /* The entity can theoretically be forecefully removed during the 
+         * disappearing animation. Make sure we don't crap out if this happens
+         */
+        if(!G_EntityExists(uid))
+            return NULL_RESULT;
+
+        uint32_t prev_long = elapsed / 250;
+        uint32_t curr_long =  (curr - start) / 250;
+        elapsed = curr - start;
+
+        float pc = (elapsed - (prev_long * 250)) / 250;
+        vec3_t curr_pos = (vec3_t){
+            start_pos.x,
+            start_pos.y - (elapsed / duration) * height,
+            start_pos.z,
+        };
+        G_Pos_Set(uid, curr_pos);
+    }
+
+    G_DeferredRemove(uid);
+    return NULL_RESULT;
+}
+
+static void add_corpse(const char *dir, const char *pfobj, uint32_t duration,
+                        vec3_t pos, vec3_t scale, quat_t rot)
+{
+    const uint32_t uid = Entity_NewUID();
+    uint32_t flags;
+    bool loaded = AL_EntityFromPFObj(dir, pfobj, "__corpse__", uid, &flags);
+    if(!loaded)
+        return;
+
+    G_AddEntity(uid, flags, pos);
+    Entity_SetRot(uid, rot);
+    Entity_SetScale(uid, scale);
+    G_Pos_Set(uid, pos);
+
+    vec_corpse_push(&s_corpses, (struct corpse){uid, duration, dir, pfobj});
+}
+
+static void on_death_anim_finish(void *user, void *event)
+{
+    uint32_t self = (uintptr_t)user;
+    struct combatstate *cs = combatstate_get(self);
+    assert(cs);
+
+    khash_t(id) *flags = s_combat_work.gamestate.flags;
+    khiter_t k = kh_get(id, flags, self);
+    assert(k != kh_end(flags));
+    kh_value(flags, k) = kh_value(flags, k) | ENTITY_FLAG_ZOMBIE;
+
+    E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, self, on_death_anim_finish);
+    G_Zombiefy(self, true);
+
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    vec3_t pos = G_Pos_GetFrom(gs->positions, self);
+    quat_t rot = Entity_GetRotFrom(gs->transforms, self);
+
+    if(cs->corpse_dir && cs->corpse_pfobj) {
+        add_corpse(cs->corpse_dir, cs->corpse_pfobj, DEFAULT_CORPSE_DURATION_SECS,
+            pos, cs->corpse_scale, rot);
+    }
+}
+
+static void do_add_entity(uint32_t uid, enum combat_stance initial)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    assert(combatstate_get(uid) == NULL);
+    struct combatstate new_cs = (struct combatstate) {
+        .stats = {0},
+        .current_hp = 0,
+        .stance = initial,
+        .state = STATE_NOT_IN_COMBAT,
+        .sticky = false,
+        .move_cmd_interrupted = false,
+        .pd = combat_default_proj(),
+        .fd = combat_default_fire(),
+        .corpse_dir = NULL,
+        .corpse_pfobj = NULL,
+    };
+    combatstate_set(uid, &new_cs);
+}
+
+static void do_remove_entity(uint32_t uid)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    if(!cs)
+        return;
+
+    E_Entity_Unregister(EVENT_UPDATE_START, uid, on_attack_anim_tick);
+    E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, uid, on_death_anim_finish);
+
+    if(cs->state == STATE_ATTACK_ANIM_PLAYING
+    || cs->state == STATE_CAN_ATTACK) {
+        combat_notify_attack_end(uid, cs);
+    }
+
+    PF_FREE(cs->pd.basedir);
+    PF_FREE(cs->pd.pfobj);
+    if(cs->pd.flags & PROJ_HAS_IMPACT_SPRITE) {
+        PF_FREE(cs->pd.impact_sprite.filename);
+    }
+    if(cs->pd.flags & PROJ_HAS_TRAIL_SPRITE) {
+        PF_FREE(cs->pd.trail_sprite.filename);
+    }
+
+    combat_dying_remove(uid);
+    combatstate_remove(uid);
+}
+
+static void do_tryhit(uint32_t uid, vec3_t proj_pos)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    if(entity_dead(uid))
+        return; /* Our unit already got 'killed' */
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    if(cs->state == STATE_DEATH_ANIM_PLAYING
+    || cs->state == STATE_NOT_IN_COMBAT)
+        return;
+
+    /* A stale hit can arrive after the unit left its attack (re-targeted, moved off
+     * to garrison, etc.); don't resurrect the attack state without a paired start.
+     */
+    if(!cs->attack_notified)
+        return;
+
+    cs->state = STATE_CAN_ATTACK;
+
+    /* Ranged units always loose their projectile once the fire frame is reached - even if
+     * the target has since died or slipped out of range; entity_ranged_attack lobs a
+     * best-effort shot in those cases.
+     */
+    if(cs->stats.attack_range > 0.0f) {
+        entity_ranged_attack(uid, cs->target_uid, proj_pos);
+        return;
+    }
+
+    if(entity_dead(cs->target_uid) || garrisoned(cs->target_uid)) {
+        return; /* Our (melee) target already got 'killed' */
+    }
+
+    struct combatstate *target_cs = combatstate_get(cs->target_uid);
+    quat_t target_dir = entity_turn_dir(uid, cs->target_uid);
+    quat_t ent_rot = Entity_GetRot(uid);
+    float angle_diff = PFM_Quat_PitchDiff(&ent_rot, &target_dir);
+
+    if(RAD_TO_DEG(fabs(angle_diff)) > 5.0f) {
+
+        combat_notify_attack_end(uid, cs);
+        entity_turn_to_target(uid, cs->target_uid);
+        return;
+    }
+
+    if(!entity_can_attack(uid, cs->target_uid)) {
+        /* Keep sticky chase instead of idling in CAN_ATTACK with no hits. */
+        uint32_t flags = G_FlagsGet(uid);
+        if(cs->sticky && (flags & ENTITY_FLAG_MOVABLE)
+        && cs->stance != COMBAT_STANCE_HOLD_POSITION) {
+            combat_notify_attack_end(uid, cs);
+            cs->state = STATE_MOVING_TO_TARGET_LOCKED;
+            entity_move_in_range(uid, cs->target_uid);
+        }
+        return;
+    }
+
+    entity_melee_attack(uid, cs->target_uid);
+}
+
+static void do_proj_tryhit(struct proj_hit *hit)
+{
+    if(entity_dead(hit->ent_uid) || garrisoned(hit->ent_uid))
+        return;
+
+    struct combatstate *cs = combatstate_get(hit->ent_uid);
+    float dmg = hit->cookie * (1.0f - cs->stats.base_armour_pc);
+    cs->current_hp = MAX(0, cs->current_hp - dmg);
+
+    if(cs->current_hp == 0 && cs->stats.max_hp > 0) {
+        entity_die(hit->ent_uid);
+    }
+}
+
+static void do_set_stance(uint32_t uid, enum combat_stance stance)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    /* The stance command is deferred, so the entity may have been removed
+     * (e.g. despawned by a script) or have died before this is processed.
+     * In the latter case, resetting its state would resurrect it.
+     */
+    struct combatstate *cs = combatstate_get(uid);
+    if(!cs || cs->state == STATE_DEATH_ANIM_PLAYING)
+        return;
+
+    if(stance == cs->stance)
+        return;
+
+    if(stance == COMBAT_STANCE_NO_ENGAGEMENT) {
+        do_stop_attack(uid);
+    }
+
+    if(stance == COMBAT_STANCE_HOLD_POSITION 
+    && (cs->state == STATE_MOVING_TO_TARGET || cs->state == STATE_MOVING_TO_TARGET_LOCKED)) {
+
+        G_Move_Stop(uid);
+        cs->state = STATE_NOT_IN_COMBAT;
+        cs->move_cmd_interrupted = false;
+    }
+
+    cs->stance = stance;
+}
+
+static void do_clear_saved_move_cmd(uint32_t uid)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    if(cs) {
+        cs->move_cmd_interrupted = false;
+    }
+}
+
+static void do_attack_unit(uint32_t uid, uint32_t target)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+
+    /* This deferred command may be processed after the entity died (and is now
+     * playing its death animation); acting on it would reset the combat state and
+     * resurrect the entity, leading to a second death.
+     */
+    if(cs->state == STATE_DEATH_ANIM_PLAYING)
+        return;
+
+    do_stop_attack(uid);
+    cs->stance = COMBAT_STANCE_AGGRESSIVE;
+
+    uint32_t flags = G_FlagsGetFrom(gs->flags, uid);
+    if(flags & ENTITY_FLAG_MOVABLE) {
+    
+        cs->sticky = true;
+        cs->target_uid = target;
+        cs->state = STATE_MOVING_TO_TARGET_LOCKED;
+        cs->move_cmd_interrupted = false;
+
+        entity_move_in_range(uid, target);
+
+    }else if(entity_can_attack(uid, target)) {
+    
+        cs->sticky = true;
+        cs->target_uid = target;
+        cs->state = STATE_CAN_ATTACK;
+        combat_notify_attack_start(uid, cs);
+    }
+}
+
+static void do_stop_attack(uint32_t uid)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    if(!cs || cs->state == STATE_DEATH_ANIM_PLAYING)
+        return;
+
+    E_Entity_Unregister(EVENT_UPDATE_START, uid, on_attack_anim_tick);
+
+    if(cs->state == STATE_ATTACK_ANIM_PLAYING
+    || cs->state == STATE_CAN_ATTACK) {
+        combat_notify_attack_end(uid, cs);
+    }
+
+    cs->state = STATE_NOT_IN_COMBAT;
+
+    struct combat_cmd *cmd = snoop_most_recent_command(COMBAT_CMD_CLEAR_SAVED_MOVE_CMD,
+        (void*)(uintptr_t)uid, uids_match);
+
+    /* If enemies remain nearby, do NOT resume the pre-combat move — that was
+     * making low-HP remnants walk away instead of re-engaging. */
+    if(!cmd && cs->move_cmd_interrupted) {
+        assert(cs->stance != COMBAT_STANCE_HOLD_POSITION);
+        if(maybe_enemy_near(uid)) {
+            cs->move_cmd_interrupted = false;
+            G_Move_Stop(uid);
+        }else{
+            G_Move_SetDest(uid, cs->move_cmd_xz, cs->move_cmd_attacking);
+            cs->move_cmd_interrupted = false;
+        }
+    }
+}
+
+static void do_add_time_delta(uint32_t delta)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    uint32_t key;
+    kh_foreach(s_entity_state_table, key, (struct combatstate){0}, {
+
+        struct combatstate *curr = combatstate_get(key);
+        if(curr->state != STATE_ATTACKING)
+            continue;
+        curr->attack_start_tick += delta;
+    });
+}
+
+static void do_add_ref(int faction_id, vec2_t pos)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct map_resolution mapres;
+    M_GetResolution(s_map, &mapres);
+
+    struct map_resolution binres = (struct map_resolution){
+        mapres.chunk_w, mapres.chunk_h,
+        X_BINS_PER_CHUNK, Z_BINS_PER_CHUNK,
+		mapres.field_w, mapres.field_h
+    };
+
+    struct tile_desc td;
+    if(!M_Tile_DescForPoint2D(binres, M_GetPos(s_map), pos, &td))
+        return;
+
+    size_t x = td.chunk_c * X_BINS_PER_CHUNK + td.tile_c;
+    size_t z = td.chunk_r * Z_BINS_PER_CHUNK + td.tile_r;
+    size_t idx = x * (binres.chunk_w * binres.tile_w) + z;
+
+    assert(s_fac_refcnts[faction_id][idx] < UINT16_MAX);
+    s_fac_refcnts[faction_id][idx]++;
+}
+
+static void do_remove_ref(int faction_id, vec2_t pos)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct map_resolution mapres;
+    M_GetResolution(s_map, &mapres);
+
+    struct map_resolution binres = (struct map_resolution){
+        mapres.chunk_w, mapres.chunk_h,
+        X_BINS_PER_CHUNK, Z_BINS_PER_CHUNK,
+		mapres.field_w, mapres.field_h
+    };
+
+    struct tile_desc td;
+    if(!M_Tile_DescForPoint2D(binres, M_GetPos(s_map), pos, &td))
+        return;
+
+    size_t x = td.chunk_c * X_BINS_PER_CHUNK + td.tile_c;
+    size_t z = td.chunk_r * Z_BINS_PER_CHUNK + td.tile_r;
+    size_t idx = x * (binres.chunk_w * binres.tile_w) + z;
+
+    assert(s_fac_refcnts[faction_id][idx] > 0);
+    s_fac_refcnts[faction_id][idx]--;
+}
+
+static void do_update_ref(int oldfac, int newfac, vec2_t pos)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    do_remove_ref(oldfac, pos);
+    do_add_ref(newfac, pos);
+}
+
+static void do_set_base_armour(uint32_t uid, float armour_pc)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->stats.base_armour_pc = armour_pc;
+}
+
+static void do_set_base_damage(uint32_t uid, int dmg)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->stats.base_dmg = dmg;
+}
+
+static void do_set_current_hp(uint32_t uid, int hp)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->current_hp = MIN(hp, cs->stats.max_hp);
+}
+
+static void do_set_max_hp(uint32_t uid, int hp)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->stats.max_hp = hp;
+}
+
+static void do_set_range(uint32_t uid, float range)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->stats.attack_range = range;
+}
+
+static void do_set_proj_desc(uint32_t uid, const struct proj_desc *pd)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+
+    PF_FREE(cs->pd.basedir);
+    PF_FREE(cs->pd.pfobj);
+    if(cs->pd.flags & PROJ_HAS_IMPACT_SPRITE) {
+        PF_FREE(cs->pd.impact_sprite.filename);
+    }
+    if(cs->pd.flags & PROJ_HAS_TRAIL_SPRITE) {
+        PF_FREE(cs->pd.trail_sprite.filename);
+    }
+    cs->pd = *pd;
+}
+
+static void do_set_proj_fire_desc(uint32_t uid, const struct proj_fire_desc *fd)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->fd = *fd;
+}
+
+static void do_set_corpse_model(uint32_t uid, const char *dir, const char *pfobj, vec3_t scale)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->corpse_dir = dir;
+    cs->corpse_pfobj = pfobj;
+    cs->corpse_scale = scale;
+}
+
+static vec3_t projectile_spawn_pos(uint32_t uid)
+{
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+
+    vec4_t proj_pos = (vec4_t){0};
+    if(cs->stats.attack_range > 0.0) {
+
+        mat4x4_t pose_mat;
+        mat4x4_t model;
+        Entity_ModelMatrix(uid, &model);
+        struct proj_fire_desc *fd = &cs->fd;
+
+        if(strlen(cs->fd.bone_name) > 0 
+        && A_GetBoneCurrPoseMat(uid, cs->fd.bone_name, &pose_mat)) {
+
+            vec4_t bone_pos_homo;
+            vec4_t offset_homo = (vec4_t){fd->offset.x, fd->offset.y, fd->offset.z, 1.0};
+
+            PFM_Mat4x4_Mult4x1(&pose_mat, &offset_homo, &bone_pos_homo);
+            PFM_Mat4x4_Mult4x1(&model, &bone_pos_homo, &proj_pos);
+        }else{
+            /* Entity_CenterPos is already in world space, so the offset is
+             * applied directly without re-transforming by the model matrix. */
+            vec3_t center = Entity_CenterPos(uid);
+            PFM_Vec3_Add(&center, &fd->offset, &center);
+            proj_pos = (vec4_t){center.x, center.y, center.z, 1.0f};
+        }
+    }
+    return (vec3_t){proj_pos.x, proj_pos.y, proj_pos.z};
+}
+
+static void on_attack_anim_tick(void *user, void *event)
+{
+    uint32_t self = (uintptr_t)user;
+    int curr_frame = A_GetCurrFrameIndex(self);
+    struct combatstate *cs = combatstate_get(self);
+    assert(cs);
+
+    if(curr_frame != cs->fd.frame_offset)
+        return;
+
+    E_Entity_Unregister(EVENT_UPDATE_START, self, on_attack_anim_tick);
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_TRYHIT,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = self
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = projectile_spawn_pos(self)
+        }
+    });
+}
+
+static bool entity_dead(uint32_t uid)
+{
+    struct combatstate *cs = combatstate_get(uid);
+    if(!cs || (cs->state == STATE_DEATH_ANIM_PLAYING)
+    || (G_FlagsGetFrom(s_combat_work.gamestate.flags, uid) & ENTITY_FLAG_ZOMBIE))
+        return true;
+
+    return false;
+}
+
+static void entity_target_enemy(uint32_t uid, uint32_t enemy)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+
+    /* Sticky chase: auto-acquired targets used to drop combat when the enemy
+     * took one step out of melee range, leaving both sides on low HP idle. */
+    cs->sticky = true;
+    cs->target_uid = enemy;
+
+    if(entity_can_attack(uid, enemy)) {
+
+        assert(cs->stance == COMBAT_STANCE_AGGRESSIVE 
+            || cs->stance == COMBAT_STANCE_HOLD_POSITION);
+
+        entity_turn_to_target(uid, enemy);
+        return;
+    }
+
+    uint32_t flags = G_FlagsGetFrom(gs->flags, uid);
+    if(cs->stance == COMBAT_STANCE_AGGRESSIVE && (flags & ENTITY_FLAG_MOVABLE)) {
+
+        cs->state = STATE_MOVING_TO_TARGET_LOCKED;
+
+        if(!cs->move_cmd_interrupted 
+        && G_Move_GetDest(uid, &cs->move_cmd_xz, &cs->move_cmd_attacking)) {
+            cs->move_cmd_interrupted = true; 
+        }
+        entity_move_in_range(uid, enemy);
+    }else{
+        /* Can neither attack nor chase the target (e.g. a stationary unit whose enemy
+         * is out of range); leave combat so the state matches the cleared notification. */
+        cs->sticky = false;
+        cs->state = STATE_NOT_IN_COMBAT;
+    }
+}
+
+static void entity_stop_combat(uint32_t uid)
+{
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    cs->state = STATE_NOT_IN_COMBAT;
+    cs->sticky = false;
+
+    uint32_t flags = G_FlagsGet(uid);
+    if(!(flags & ENTITY_FLAG_MOVABLE))
+        return;
+
+    /* Formation members keep their move state so they rejoin the advance once the hold lifts. */
+    if(G_Formation_GetForEnt(uid) != NULL_FID)
+        return;
+
+    struct combat_cmd *cmd = snoop_most_recent_command(COMBAT_CMD_SET_RANGE,
+        (void*)(uintptr_t)uid, uids_match);
+
+    /* Prefer re-aggro over resuming an old move while hostiles are still around. */
+    if(maybe_enemy_near(uid)) {
+        cs->move_cmd_interrupted = false;
+        G_Move_Stop(uid);
+        return;
+    }
+
+    if(!cmd && cs->move_cmd_interrupted) {
+        G_Move_SetDest(uid, cs->move_cmd_xz, cs->move_cmd_attacking);
+        cs->move_cmd_interrupted = false;
+    }else {
+        G_Move_Stop(uid);
+    }
+}
+
+uint32_t closest_eligible_entity(uint32_t uid)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    struct combatstate *cs = combatstate_get(uid);
+    vec2_t pos = G_Pos_GetXZFrom(gs->positions, uid);
+    float range = MAX(TARGET_ACQUISITION_RANGE, cs->stats.attack_range);
+
+    return G_Pos_NearestWithPredFrom(gs->postree, gs->positions, gs->flags,
+        pos, valid_enemy, (void*)((uintptr_t)uid), range);
+}
+
+static void entity_compute_update(uint32_t uid, struct combat_work_out *out)
+{
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+    uint32_t flags = G_FlagsGetFrom(gs->flags, uid);
+
+    const struct combatstate *old = combatstate_get(uid);
+    struct combatstate *curr = &out->next_state;
+    *curr = *old;
+
+    out->action = COMBAT_ACTION_NONE;
+    out->notify_attack_end = false;
+    out->ent_uid = uid;
+
+    /* Garrisoned units are off the battlefield: freeze their combat state so they
+     * can't re-engage and desync the attack-notified pairing while inside a carrier.
+     * do_garrison cleanly disengages combat when they enter. */
+    if(flags & ENTITY_FLAG_GARRISONED)
+        return;
+
+    switch(curr->state) {
+    case STATE_NOT_IN_COMBAT: 
+    {
+        if(curr->stance == COMBAT_STANCE_NO_ENGAGEMENT)
+            break;
+
+        if(flags & ENTITY_FLAG_BUILDING 
+        && !G_Building_IsCompletedFrom(gs->buildstate, uid))
+            break;
+
+        if(curr->stats.base_dmg == 0)
+            break;
+
+        if(!maybe_enemy_near(uid))
+            break;
+
+        uint32_t enemy = closest_eligible_entity(uid);
+        if(enemy == NULL_UID)
+            break;
+
+        out->action = COMBAT_ACTION_TARGET_ENEMY;
+        out->action_args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        };
+        out->action_args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = enemy
+        };
+        break;
+    }
+    case STATE_MOVING_TO_TARGET:
+    {
+        assert(flags & ENTITY_FLAG_MOVABLE);
+
+        /* Handle the case where our target dies before we reach it */
+        uint32_t enemy = closest_eligible_entity(uid);
+        if(enemy == NULL_UID) {
+
+            out->action = COMBAT_ACTION_STOP_COMBAT;
+            out->action_args[0] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = uid
+            };
+            break;
+        }
+
+        /* And the case where a different target becomes even closer */
+        if(enemy != curr->target_uid) {
+            curr->target_uid = enemy;
+        }
+
+        /* Check if we're within attacking range of our target */
+        if(entity_can_attack(uid, enemy)) {
+
+            out->action = COMBAT_ACTION_TURN_TO_TARGET;
+            out->action_args[0] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = uid
+            };
+            out->action_args[1] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = enemy
+            };
+        }
+        break;
+    }
+    case STATE_MOVING_TO_TARGET_LOCKED:
+    {
+        assert(flags & ENTITY_FLAG_MOVABLE);
+
+        if(entity_dead(curr->target_uid) || garrisoned(curr->target_uid)) {
+
+            curr->state = STATE_NOT_IN_COMBAT;
+            curr->sticky = false;
+
+            out->action = COMBAT_ACTION_STOP_MOVEMENT;
+            out->action_args[0] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = uid
+            };
+            break;
+        }
+
+        struct obb obb;
+        current_obb_from_gamestate(curr->target_uid, &obb);
+
+        uint16_t pmask = gs->player_factions;
+        if(!G_Fog_ObjVisibleFrom(gs->fog_state, gs->fog_enabled, pmask, &obb)) {
+        
+            curr->state = STATE_NOT_IN_COMBAT;
+            curr->sticky = false;
+
+            out->action = COMBAT_ACTION_STOP_MOVEMENT;
+            out->action_args[0] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = uid
+            };
+            break;
+        }
+
+        /* Check if we're within attacking range of our target */
+        if(entity_can_attack(uid, curr->target_uid)) {
+
+            out->action = COMBAT_ACTION_TURN_TO_TARGET;
+            out->action_args[0] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = uid
+            };
+            out->action_args[1] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = curr->target_uid
+            };
+            break;
+        }
+
+        /* We approached the target, but it slipped away from us. Re-engage. */
+        out->action = COMBAT_ACTION_MOVE_IN_RANGE_IF_STILL;
+        out->action_args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        };
+        out->action_args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr->target_uid
+        };
+        break;
+    }
+    case STATE_CAN_ATTACK:
+    {
+        /* Our target could have 'died' or gotten out of combat range - check this first. */
+        if(entity_dead(curr->target_uid) 
+        || garrisoned(curr->target_uid)
+        || !entity_can_attack(uid, curr->target_uid)) {
+
+            if(curr->sticky) {
+
+                if(!entity_dead(curr->target_uid)
+                && !garrisoned(curr->target_uid)) {
+
+                    curr->state = STATE_MOVING_TO_TARGET_LOCKED;
+                    out->notify_attack_end = true;
+                    out->action = COMBAT_ACTION_MOVE_IN_RANGE;
+                    out->action_args[0] = (struct attr){
+                        .type = TYPE_INT,
+                        .val.as_int = uid
+                    };
+                    out->action_args[1] = (struct attr){
+                        .type = TYPE_INT,
+                        .val.as_int = curr->target_uid
+                    };
+                    break;
+                }else{
+                    curr->sticky = false;
+                }
+            }
+
+            /* Check if there's another suitable target */
+            uint32_t enemy = closest_eligible_entity(uid);
+            if(enemy == NULL_UID) {
+                out->notify_attack_end = true;
+                out->action = COMBAT_ACTION_STOP_COMBAT;
+                out->action_args[0] = (struct attr){
+                    .type = TYPE_INT,
+                    .val.as_int = uid
+                };
+                break;
+            }
+
+            if(curr->stance == COMBAT_STANCE_HOLD_POSITION && !entity_can_attack(uid, enemy)) {
+
+                out->notify_attack_end = true;
+                out->action = COMBAT_ACTION_STOP_COMBAT;
+                out->action_args[0] = (struct attr){
+                    .type = TYPE_INT,
+                    .val.as_int = uid
+                };
+                break;
+            }
+
+            out->notify_attack_end = true;
+            out->action = COMBAT_ACTION_TARGET_ENEMY;
+            out->action_args[0] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = uid
+            };
+            out->action_args[1] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = enemy
+            };
+            break;
+        }
+
+        /* Perform combat simulation between entities with targets within range */
+        if(flags & ENTITY_FLAG_ANIMATED) {
+            curr->state = STATE_ATTACK_ANIM_PLAYING;
+            out->action = COMBAT_ACTION_ANIMATED_ATTACK;
+            out->action_args[0] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = uid
+            };
+        }else{
+            curr->state = STATE_ATTACKING;
+            curr->attack_start_tick = SDL_GetTicks();
+        }
+
+        break;
+    }
+    case STATE_TURNING_TO_TARGET: {
+
+        if(entity_dead(curr->target_uid) || garrisoned(curr->target_uid)) {
+            out->action = COMBAT_ACTION_STOP_COMBAT;
+            out->action_args[0] = (struct attr){
+                .type = TYPE_INT,
+                .val.as_int = uid
+            };
+            break;
+        }
+
+        /* Target slid out of melee/attack range while we turned — chase, do not idle. */
+        if(!entity_can_attack(uid, curr->target_uid)) {
+            uint32_t flags2 = G_FlagsGetFrom(gs->flags, uid);
+            if((curr->sticky || curr->stance == COMBAT_STANCE_AGGRESSIVE)
+            && (flags2 & ENTITY_FLAG_MOVABLE)
+            && curr->stance != COMBAT_STANCE_HOLD_POSITION) {
+                curr->state = STATE_MOVING_TO_TARGET_LOCKED;
+                curr->sticky = true;
+                out->action = COMBAT_ACTION_MOVE_IN_RANGE;
+                out->action_args[0] = (struct attr){
+                    .type = TYPE_INT,
+                    .val.as_int = uid
+                };
+                out->action_args[1] = (struct attr){
+                    .type = TYPE_INT,
+                    .val.as_int = curr->target_uid
+                };
+            }else{
+                out->action = COMBAT_ACTION_STOP_COMBAT;
+                out->action_args[0] = (struct attr){
+                    .type = TYPE_INT,
+                    .val.as_int = uid
+                };
+            }
+            break;
+        }
+
+        out->action = COMBAT_ACTION_ATTACK_IF_STILL;
+        out->action_args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        };
+        out->action_args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr->target_uid
+        };
+        break;
+    }
+    case STATE_ATTACKING: {
+
+        uint32_t ticks = SDL_GetTicks();
+        uint32_t period = DEFAULT_ATTACK_PERIOD * 1000.0f;
+        if(!SDL_TICKS_PASSED(ticks, curr->attack_start_tick + period))
+            break;
+
+        out->action = COMBAT_ACTION_TRYHIT;
+        out->action_args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        };
+        break;
+    }
+    case STATE_ATTACK_ANIM_PLAYING:
+    case STATE_DEATH_ANIM_PLAYING:
+        /* No-op */
+        break;
+    default: 
+        assert(0);
+    };
+}
+
+static void entity_apply_update(struct combat_work_out *out)
+{
+    uint32_t uid = out->ent_uid;
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+
+    if(entity_dead(uid))
+        return;
+
+    int live_hp = cs->current_hp;
+    *cs = out->next_state;
+    cs->current_hp = live_hp;
+
+    if(out->notify_attack_end) {
+        combat_notify_attack_end(uid, cs);
+    }
+
+    switch(out->action) {
+    case COMBAT_ACTION_NONE:
+        break;
+    case COMBAT_ACTION_TARGET_ENEMY: {
+        uint32_t uid = out->action_args[0].val.as_int;
+        uint32_t target = out->action_args[1].val.as_int;
+        entity_target_enemy(uid, target);
+        break;
+    }
+    case COMBAT_ACTION_STOP_COMBAT: {
+        uint32_t uid = out->action_args[0].val.as_int;
+        entity_stop_combat(uid);
+        break;
+    }
+    case COMBAT_ACTION_TURN_TO_TARGET: {
+        uint32_t uid = out->action_args[0].val.as_int;
+        uint32_t target = out->action_args[1].val.as_int;
+        entity_turn_to_target(uid, target);
+        break;
+    }
+    case COMBAT_ACTION_STOP_MOVEMENT: {
+        uint32_t uid = out->action_args[0].val.as_int;
+        G_Move_Stop(uid);
+        break;
+    }
+    case COMBAT_ACTION_MOVE_IN_RANGE: {
+        uint32_t uid = out->action_args[0].val.as_int;
+        uint32_t target = out->action_args[1].val.as_int;
+        entity_move_in_range(uid, target);
+        break;
+    }
+    case COMBAT_ACTION_MOVE_IN_RANGE_IF_STILL: {
+        uint32_t uid = out->action_args[0].val.as_int;
+        uint32_t target = out->action_args[1].val.as_int;
+        if(G_Move_Still(uid)) {
+            entity_move_in_range(uid, target);
+        }
+        break;
+    }
+    case COMBAT_ACTION_ANIMATED_ATTACK: {
+        uint32_t uid = out->action_args[0].val.as_int;
+        E_Entity_Register(EVENT_UPDATE_START, uid, on_attack_anim_tick, 
+            (void*)((uintptr_t)uid), G_RUNNING);
+        break;
+    }
+    case COMBAT_ACTION_ATTACK_IF_STILL: {
+        uint32_t old_uid = uid;
+        uint32_t uid = out->action_args[0].val.as_int;
+        assert(old_uid == uid);
+
+        uint32_t target = out->action_args[1].val.as_int;
+        bool ready = fires_from_formation(uid) ? faces_target(uid, target) : G_Move_Still(uid);
+        if(ready) {
+            cs->state = STATE_CAN_ATTACK;
+            combat_notify_attack_start(uid, cs);
+        }
+        break;
+    }
+    case COMBAT_ACTION_TRYHIT: {
+        uint32_t uid = out->action_args[0].val.as_int;
+        vec3_t proj_pos = projectile_spawn_pos(uid);
+        do_tryhit(uid, proj_pos);
+        break;
+    }
+    default:
+        assert(0);
+    }
+
+    /* Keep engaged formation members held in place so they fire without leaving the formation. */
+    bool engaged = (cs->state == STATE_TURNING_TO_TARGET || cs->state == STATE_CAN_ATTACK
+                 || cs->state == STATE_ATTACK_ANIM_PLAYING || cs->state == STATE_ATTACKING);
+    uint32_t eflags = G_FlagsGet(uid);
+
+    bool hold = engaged && fires_from_formation(uid);
+    if(hold && !(eflags & ENTITY_FLAG_COMBAT_HELD)) {
+        G_Move_SetCombatHeld(uid, true);
+    }else if(!hold && (eflags & ENTITY_FLAG_COMBAT_HELD)) {
+        G_Move_SetCombatHeld(uid, false);
+    }
+}
+
+static void combat_push_cmd(struct combat_cmd cmd)
+{
+    queue_cmd_push(&s_combat_commands, &cmd);
+}
+
+static bool uids_match(void *arg, struct combat_cmd *cmd)
+{
+    uint32_t desired_uid = (uintptr_t)arg;
+    uint32_t actual_uid = cmd->args[0].val.as_int;
+    return (desired_uid == actual_uid);
+}
+
+static struct combat_cmd *snoop_most_recent_command(enum combat_cmd_type type, void *arg,
+                                                    bool (*pred)(void*, struct combat_cmd*))
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    if(queue_size(s_combat_commands) == 0)
+        return NULL;
+
+    size_t left = queue_size(s_combat_commands);
+    for(int i = s_combat_commands.itail; left > 0;) {
+        struct combat_cmd *curr = &s_combat_commands.mem[i];
+        if(curr->type == type)
+            if(pred(arg, curr))
+                return curr;
+        i--;
+        left--;
+        if(i < 0) {
+            i = s_combat_commands.capacity - 1; /* Wrap around */
+        }
+    }
+    return NULL;
+}
+
+static enum movement_hz event_to_hz(enum eventtype event)
+{
+    static const enum movement_hz mapping[] = {
+        [EVENT_10HZ_TICK] = COMBAT_HZ_10,
+        [EVENT_5HZ_TICK] = COMBAT_HZ_5,
+        [EVENT_1HZ_TICK] = COMBAT_HZ_1,
+        [EVENT_HALFHZ_TICK] = COMBAT_HZ_HALF,
+    };
+    return mapping[event];
+}
+
+static void register_callback_for_hz(enum combat_hz hz)
+{
+    assert(hz >= 0 && hz <= COMBAT_HZ_HALF);
+    const enum eventtype mapping[] = {
+        [COMBAT_HZ_10] = EVENT_10HZ_TICK,
+        [COMBAT_HZ_5 ] = EVENT_5HZ_TICK,
+        [COMBAT_HZ_1 ] = EVENT_1HZ_TICK,
+        [COMBAT_HZ_HALF] = EVENT_HALFHZ_TICK,
+    };
+    E_Global_Register(mapping[hz], combat_tick, (void*)(uintptr_t)mapping[hz], G_RUNNING);
+}
+
+static void unregister_callback_for_hz(enum combat_hz hz)
+{
+    assert(hz >= 0 && hz <= COMBAT_HZ_HALF);
+    const enum eventtype mapping[] = {
+        [COMBAT_HZ_10] = EVENT_10HZ_TICK,
+        [COMBAT_HZ_5 ] = EVENT_5HZ_TICK,
+        [COMBAT_HZ_1 ] = EVENT_1HZ_TICK,
+        [COMBAT_HZ_HALF] = EVENT_HALFHZ_TICK,
+    };
+    E_Global_Unregister(mapping[hz], combat_tick);
+}
+
+static void combat_handle_hz_update(enum eventtype curr)
+{
+    if(!s_combat_hz_dirty)
+        return;
+
+    s_combat_hz_dirty = false;
+
+    static const enum eventtype mapping[] = {
+        [COMBAT_HZ_10] = EVENT_10HZ_TICK,
+        [COMBAT_HZ_5 ] = EVENT_5HZ_TICK,
+        [COMBAT_HZ_1 ] = EVENT_1HZ_TICK,
+        [COMBAT_HZ_HALF] = EVENT_HALFHZ_TICK,
+    };
+    enum eventtype next = mapping[s_combat_hz];
+
+    if(curr == next)
+        return;
+
+    enum combat_hz curr_hz = event_to_hz(curr);
+    enum combat_hz next_hz = s_combat_hz;
+
+    unregister_callback_for_hz(curr_hz);
+    register_callback_for_hz(next_hz);
+}
+
+static void combat_process_cmds(void)
+{
+    struct combat_cmd cmd;
+    while(queue_cmd_pop(&s_combat_commands, &cmd)) {
+        switch(cmd.type) {
+        case COMBAT_CMD_ADD: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            enum combat_stance initial = cmd.args[1].val.as_int;
+            do_add_entity(uid, initial);
+            break;
+        }
+        case COMBAT_CMD_REMOVE: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            do_remove_entity(uid);
+            break;
+        }
+        case COMBAT_CMD_TRYHIT: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            vec3_t proj_pos = cmd.args[1].val.as_vec3;
+            do_tryhit(uid, proj_pos);
+            break;
+        }
+        case COMBAT_CMD_SET_STANCE: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            enum combat_stance stance = cmd.args[1].val.as_int;
+            do_set_stance(uid, stance);
+            break;
+        }
+        case COMBAT_CMD_CLEAR_SAVED_MOVE_CMD: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            do_clear_saved_move_cmd(uid);
+            break;
+        }
+        case COMBAT_CMD_ATTACK_UNIT: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            uint32_t target = cmd.args[1].val.as_int;
+            do_attack_unit(uid, target);
+            break;
+        }
+        case COMBAT_CMD_STOP_ATTACK: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            do_stop_attack(uid);
+            break;
+        }
+        case COMBAT_CMD_ADD_TIME_DELTA: {
+            uint32_t delta = cmd.args[0].val.as_int;
+            do_add_time_delta(delta);
+            break;
+        }
+        case COMBAT_CMD_ADD_REF: {
+            int faction_id = cmd.args[0].val.as_int;
+            vec2_t pos = cmd.args[1].val.as_vec2;
+            do_add_ref(faction_id, pos);
+            break;
+        }
+        case COMBAT_CMD_REMOVE_REF: {
+            int faction_id = cmd.args[0].val.as_int;
+            vec2_t pos = cmd.args[1].val.as_vec2;
+            do_remove_ref(faction_id, pos);
+            break;
+        }
+        case COMBAT_CMD_UPDATE_REF: {
+            int oldfac = cmd.args[0].val.as_int;
+            int newfac = cmd.args[1].val.as_int;
+            vec2_t pos = cmd.args[2].val.as_vec2;
+            do_update_ref(oldfac, newfac, pos);
+            break;
+        }
+        case COMBAT_CMD_SET_BASE_ARMOUR: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            float armour_pc = cmd.args[1].val.as_float;
+            do_set_base_armour(uid, armour_pc);
+            break;
+        }
+        case COMBAT_CMD_SET_BASE_DAMAGE: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            int dmg = cmd.args[1].val.as_int;
+            do_set_base_damage(uid, dmg);
+            break;
+        }
+        case COMBAT_CMD_SET_CURRENT_HP: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            int hp = cmd.args[1].val.as_int;
+            do_set_current_hp(uid, hp);
+            break;
+        }
+        case COMBAT_CMD_SET_MAX_HP: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            int hp = cmd.args[1].val.as_int;
+            do_set_max_hp(uid, hp);
+            break;
+        }
+        case COMBAT_CMD_SET_RANGE: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            float range  = cmd.args[1].val.as_float;
+            do_set_range(uid, range);
+            break;
+        }
+        case COMBAT_CMD_SET_PROJ_DESC: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            struct proj_desc *pd = cmd.args[1].val.as_pointer;
+            do_set_proj_desc(uid, pd);
+            PF_FREE(pd);
+            break;
+        }
+        case COMBAT_CMD_SET_PROJ_FIRE_DESC: {
+            uint32_t uid = cmd.args[0].val.as_int;
+            struct proj_fire_desc *fd = cmd.args[1].val.as_pointer;
+            do_set_proj_fire_desc(uid, fd);
+            PF_FREE(fd);
+            break;
+        }
+        case COMBAT_CMD_SET_CORPSE_MODEL: {
+
+            uint32_t uid = cmd.args[0].val.as_int;
+            const char *dirkey = si_intern(cmd.args[1].val.as_string, &s_stringpool, s_stridx);
+            const char *objkey = si_intern(cmd.args[2].val.as_string, &s_stringpool, s_stridx);
+            vec3_t scale = cmd.args[3].val.as_vec3;
+            if(dirkey && objkey) {
+                do_set_corpse_model(uid, dirkey, objkey, scale);
+            }
+            break;
+        }
+        case COMBAT_CMD_PROJ_HIT: {
+            struct proj_hit *hit = cmd.args[0].val.as_pointer;
+            do_proj_tryhit(hit);
+            PF_FREE(hit);
+            break;
+        }
+        default:
+            assert(0);
+        }
+    }
+}
+
+static void combat_work(int begin_idx, int end_idx)
+{
+    for(int i = begin_idx; i <= end_idx; i++) {
+    
+        struct combat_work_in *in = &s_combat_work.in[i];
+        struct combat_work_out *out = &s_combat_work.out[i];
+        entity_compute_update(in->ent_uid, out);
+    }
+}
+
+static struct result combat_task(void *arg)
+{
+    struct combat_task_arg *combat_arg = arg;
+    size_t ncomputed = 0;
+
+    for(int i = combat_arg->begin_idx; i <= combat_arg->end_idx; i++) {
+
+        combat_work(i, i);
+        ncomputed++;
+
+        if(ncomputed % 16 == 0)
+            Task_Yield();
+    }
+    return NULL_RESULT;
+}
+
+static void combat_complete_work(void)
+{
+    Sched_AwaitAll(s_combat_work.tids, s_combat_work.futures, s_combat_work.ntasks);
+}
+
+static khash_t(aabb) *combat_copy_aabbs(void)
+{
+    PERF_ENTER();
+    khash_t(aabb) *aabbs = kh_init(aabb);
+    if(!aabbs)
+        PERF_RETURN(NULL);
+
+    const khash_t(entity) *ents = G_GetAllEntsSet();
+
+    uint32_t uid;
+    kh_foreach_key(ents, uid, {
+        int ret;
+        khiter_t k = kh_put(aabb, aabbs, uid, &ret);
+        assert(ret != -1);
+        kh_value(aabbs, k) = AL_EntityGet(uid)->identity_aabb;
+    });
+    PERF_RETURN(aabbs);
+}
+
+static void combat_copy_gamestate(void)
+{
+    PERF_ENTER();
+    s_combat_work.gamestate.factions = G_GetFactions(NULL, NULL, NULL);
+    s_combat_work.gamestate.player_factions = G_GetPlayerControlledFactions();
+    s_combat_work.gamestate.fog_enabled = G_Fog_Enabled();
+    s_combat_work.gamestate.flags = G_FlagsCopyTable();
+    s_combat_work.gamestate.positions = G_Pos_CopyTable();
+    s_combat_work.gamestate.postree = G_Pos_CopyBitmapGrid();
+    s_combat_work.gamestate.transforms = Entity_CopyTransforms();
+    s_combat_work.gamestate.sel_radiuses = G_SelectionRadiusCopyTable();
+    s_combat_work.gamestate.faction_ids = G_FactionIDCopyTable();
+    s_combat_work.gamestate.diptable = G_CopyDiplomacyTable();
+    s_combat_work.gamestate.buildstate = G_Building_CopyState();
+    s_combat_work.gamestate.aabbs = combat_copy_aabbs();
+    s_combat_work.gamestate.fog_state = G_Fog_CopyState();
+    PERF_RETURN_VOID();
+}
+
+static void combat_release_gamestate(void)
+{
+    PERF_ENTER();
+    if(s_combat_work.gamestate.flags) {
+        kh_destroy(id, s_combat_work.gamestate.flags);
+        s_combat_work.gamestate.flags = NULL;
+    }
+    if(s_combat_work.gamestate.positions) {
+        kh_destroy(pos, s_combat_work.gamestate.positions);
+        s_combat_work.gamestate.positions = NULL;
+    }
+    if(s_combat_work.gamestate.postree) {
+        G_Pos_DestroyBitmapGrid(s_combat_work.gamestate.postree);
+        s_combat_work.gamestate.postree = NULL;
+    }
+    if(s_combat_work.gamestate.transforms) {
+        kh_destroy(trans, s_combat_work.gamestate.transforms);
+        s_combat_work.gamestate.transforms = NULL;
+    }
+    if(s_combat_work.gamestate.sel_radiuses) {
+        kh_destroy(range, s_combat_work.gamestate.sel_radiuses);
+        s_combat_work.gamestate.sel_radiuses = NULL;
+    }
+    if(s_combat_work.gamestate.faction_ids) {
+        kh_destroy(id, s_combat_work.gamestate.faction_ids);
+        s_combat_work.gamestate.faction_ids = NULL;
+    }
+    if(s_combat_work.gamestate.diptable) {
+        PF_FREE(s_combat_work.gamestate.diptable);
+        s_combat_work.gamestate.diptable = NULL;
+    }
+    if(s_combat_work.gamestate.buildstate) {
+        kh_destroy(state, s_combat_work.gamestate.buildstate);
+        s_combat_work.gamestate.buildstate = NULL;
+    }
+    if(s_combat_work.gamestate.aabbs) {
+        kh_destroy(aabb, s_combat_work.gamestate.aabbs);
+        s_combat_work.gamestate.aabbs = NULL;
+    }
+    if(s_combat_work.gamestate.fog_state) {
+        PF_FREE(s_combat_work.gamestate.fog_state);
+        s_combat_work.gamestate.fog_state = NULL;
+    }
+    PERF_RETURN_VOID();
+}
+
+static void combat_update_gamestate(void)
+{
+    combat_release_gamestate();
+    combat_copy_gamestate();
+}
+
+static void combat_prepare_work(void)
+{
+    size_t nents = kh_size(s_entity_state_table);
+    s_combat_work.in = stalloc(&s_combat_work.mem, nents * sizeof(struct combat_work_in));
+    s_combat_work.out = stalloc(&s_combat_work.mem, nents * sizeof(struct combat_work_out));
+}
+
+static void combat_finish_work(void)
+{
+    PERF_ENTER();
+
+    if(s_combat_work.nwork == 0)
+        PERF_RETURN_VOID();
+
+    combat_complete_work();    
+
+    PERF_PUSH("apply updates");
+    for(int i = 0; i < s_combat_work.nwork; i++) {
+        struct combat_work_out *out = &s_combat_work.out[i];
+        entity_apply_update(out);
+    }
+    PERF_POP();
+
+    stalloc_clear(&s_combat_work.mem);
+    s_combat_work.in = NULL;
+    s_combat_work.out = NULL;
+    s_combat_work.nwork = 0;
+    s_combat_work.ntasks = 0;
+
+    PERF_RETURN_VOID();
+}
+
+static void combat_push_work(struct combat_work_in in)
+{
+    s_combat_work.in[s_combat_work.nwork++] = in;
+}
+
+static void combat_submit_work(void)
+{
+    if(s_combat_work.nwork == 0)
+        return;
+
+    size_t ntasks = SDL_GetCPUCount();
+    if(s_combat_work.nwork < 64)
+        ntasks = 1;
+    ntasks = MIN(ntasks, MAX_COMBAT_TASKS);
+
+    for(int i = 0; i < ntasks; i++) {
+
+        struct combat_task_arg *arg = stalloc(&s_combat_work.mem, sizeof(struct combat_task_arg));
+        size_t nitems = ceil((float)s_combat_work.nwork / ntasks);
+
+        arg->begin_idx = nitems * i;
+        arg->end_idx = MIN(nitems * (i + 1) - 1, s_combat_work.nwork-1);
+
+        SDL_AtomicSet(&s_combat_work.futures[s_combat_work.ntasks].status, FUTURE_INCOMPLETE);
+        s_combat_work.tids[s_combat_work.ntasks] = Sched_Create(4, combat_task, arg, 
+            "combat_task", &s_combat_work.futures[s_combat_work.ntasks], TASK_BIG_STACK);
+
+        if(s_combat_work.tids[s_combat_work.ntasks] == NULL_TID) {
+            combat_work(arg->begin_idx, arg->end_idx);
+        }else{
+            s_combat_work.ntasks++;
+        }
+    }
+}
+
+static void combat_tick(void *user, void *event)
+{
+    if(s_last_tick == g_frame_idx)
+        return;
+
+    PERF_PUSH("combat::combat_tick");
+    enum eventtype curr_event = (uintptr_t)user;
+
+    combat_finish_work();
+    combat_handle_hz_update(curr_event);
+    combat_process_cmds();
+    combat_release_gamestate();
+
+    combat_prepare_work();
+    combat_copy_gamestate();
+
+    uint32_t uid;
+    kh_foreach_key(s_entity_state_table, uid, {
+        combat_push_work((struct combat_work_in){uid});
+    });
+    combat_submit_work();
+    s_last_tick = g_frame_idx;
+
+    PERF_POP();
+}
+
+static void on_1hz_tick(void *user, void *event)
+{
+    size_t ncorpses = vec_size(&s_corpses);
+    for(int i = 0; i < ncorpses; i++) {
+        struct corpse *curr = &vec_AT(&s_corpses, i);
+        curr->secs_left--;
+        if(curr->secs_left == 0) {
+
+            uint32_t uid = curr->uid;
+            uint32_t tid = Sched_Create(1, corpse_disappear_task, (void*)(uintptr_t)uid, 
+                "corpse_disappear_task", NULL, TASK_MAIN_THREAD_PINNED | TASK_BIG_STACK);
+            Sched_RunSync(tid);
+
+            struct corpse *last = &vec_AT(&s_corpses, ncorpses-1);
+            memmove(curr, last, sizeof(struct corpse));
+            ncorpses--;
+            s_corpses.size--;
+        }
+    }
+}
+
+static void on_mousedown(void *user, void *event)
+{
+    SDL_MouseButtonEvent *mouse_event = &(((SDL_Event*)event)->button);
+
+    bool targeting = G_Move_InTargetMode();
+    bool right = (mouse_event->button == SDL_BUTTON_RIGHT);
+    bool left = (mouse_event->button == SDL_BUTTON_LEFT);
+
+    if(G_MouseOverMinimap())
+        return;
+
+    if(S_UI_MouseOverWindow(mouse_event->x, mouse_event->y))
+        return;
+
+    if(right && targeting)
+        return;
+
+    if(left && !targeting)
+        return;
+
+    if(right && (G_CurrContextualAction() != CTX_ACTION_ATTACK))
+        return;
+
+    enum selection_type sel_type;
+    const vec_entity_t *sel = G_Sel_Get(&sel_type);
+    size_t nattacking = 0;
+
+    if(vec_size(sel) == 0 || sel_type != SELECTION_TYPE_PLAYER)
+        return;
+
+    uint32_t first = vec_AT(sel, 0);
+    uint32_t target = G_Sel_GetHovered();
+
+    if((target == NULL_UID) 
+    || !(G_FlagsGet(target) & ENTITY_FLAG_COMBATABLE) || !enemies(first, target))
+        return;
+
+    for(int i = 0; i < vec_size(sel); i++) {
+
+        uint32_t curr = vec_AT(sel, i);
+        uint32_t flags = G_FlagsGet(curr);
+
+        if(!(flags & ENTITY_FLAG_COMBATABLE))
+            continue;
+
+        G_Combat_AttackUnit(curr, target);
+        nattacking++;
+    }
+
+    if(nattacking) {
+        Entity_Ping(target);
+    }
+}
+
+static void combat_render_targets(void)
+{
+    int winw, winh;
+    Engine_WinDrawableSize(&winw, &winh);
+    const struct camera *cam = G_GetActiveCamera();
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+
+    uint32_t key;
+    struct combatstate curr;
+
+    kh_foreach(s_entity_state_table, key, curr, {
+
+        if(!G_EntityExists(key))
+            continue;
+
+        vec2_t ent_pos = G_Pos_GetXZFrom(gs->positions, key);
+        mat4x4_t ident;
+        PFM_Mat4x4_Identity(&ident);
+
+        const float radius = TARGET_ACQUISITION_RANGE;
+        const float width = 0.25f;
+        vec3_t red = (vec3_t){1.0f, 0.0f, 0.0f};
+        vec3_t blue = (vec3_t){0.0f, 0.0f, 1.0f};
+
+        switch(curr.state) {
+        case STATE_MOVING_TO_TARGET:
+        case STATE_MOVING_TO_TARGET_LOCKED:
+        case STATE_CAN_ATTACK: {
+
+            if(entity_dead(curr.target_uid) || garrisoned(curr.target_uid))
+                continue;
+        
+            vec2_t delta;
+            vec2_t target_pos = G_Pos_GetXZFrom(gs->positions, curr.target_uid);
+            PFM_Vec2_Sub(&target_pos, &ent_pos, &delta);
+
+            float t = PFM_Vec2_Len(&delta);
+            PFM_Vec2_Normal(&delta, &delta);
+            vec3_t dir = (vec3_t){delta.x, 0.0f, delta.z};
+
+            vec3_t raised_pos = (vec3_t){
+                ent_pos.x,
+                M_HeightAtPoint(G_GetPrevTickMap(), (vec2_t){ent_pos.x, ent_pos.z}) + 5.0f, 
+                ent_pos.z 
+            };
+
+            R_PushCmd((struct rcmd){
+                .func = R_GL_DrawRay,
+                .nargs = 5,
+                .args = {
+                    R_PushArg(&raised_pos, sizeof(raised_pos)),
+                    R_PushArg(&dir, sizeof(dir)),
+                    R_PushArg(&ident, sizeof(ident)),
+                    R_PushArg(&red, sizeof(red)),
+                    R_PushArg(&t, sizeof(t)),
+                },
+            });
+            break;
+        }
+        default:
+            break;
+        }
+
+        R_PushCmd((struct rcmd){
+            .func = R_GL_DrawSelectionCircle,
+            .nargs = 5,
+            .args = {
+                R_PushArg(&ent_pos, sizeof(ent_pos)),
+                R_PushArg(&radius, sizeof(radius)),
+                R_PushArg(&width, sizeof(width)),
+                R_PushArg(&blue, sizeof(blue)),
+                (void*)G_GetPrevTickMap(),
+            },
+        });
+
+        vec2_t ss_pos = Entity_TopScreenPos(key, winw, winh);
+        struct rect bounds = (struct rect){ss_pos.x - 75, ss_pos.y + 5, 600, 16};
+        struct rgba color = (struct rgba){255, 0, 0, 255};
+        UI_DrawText(s_name_for_state[curr.state], bounds, color);
+    });
+}
+
+static void combat_render_ranges(void)
+{
+    uint32_t key;
+    struct combatstate curr;
+    struct combat_gamestate *gs = &s_combat_work.gamestate;
+
+    kh_foreach(s_entity_state_table, key, curr, {
+
+        if(!G_EntityExists(key))
+            continue;
+
+        if(curr.stats.attack_range == 0.0f)
+            continue;
+
+        vec2_t ent_pos = G_Pos_GetXZFrom(gs->positions, key);
+        mat4x4_t ident;
+        PFM_Mat4x4_Identity(&ident);
+
+        const float radius = curr.stats.attack_range;
+        const float width = 0.25f;
+        vec3_t red = (vec3_t){1.0f, 0.0f, 0.0f};
+
+        R_PushCmd((struct rcmd){
+            .func = R_GL_DrawSelectionCircle,
+            .nargs = 5,
+            .args = {
+                R_PushArg(&ent_pos, sizeof(ent_pos)),
+                R_PushArg(&radius, sizeof(radius)),
+                R_PushArg(&width, sizeof(width)),
+                R_PushArg(&red, sizeof(red)),
+                (void*)G_GetPrevTickMap(),
+            },
+        });
+    });
+}
+
+static void on_render_3d(void *user, void *event)
+{
+    struct sval setting;
+    ss_e status;
+    (void)status;
+
+    status = Settings_Get("pf.debug.show_combat_targets", &setting);
+    assert(status == SS_OKAY);
+
+    if(setting.as_bool) {
+        combat_render_targets();
+    }
+
+    status = Settings_Get("pf.debug.show_combat_ranges", &setting);
+    assert(status == SS_OKAY);
+
+    if(setting.as_bool) {
+        combat_render_ranges();
+    }
+}
+
+static void on_proj_hit(void *user, void *event)
+{
+    struct proj_hit *hit = event;
+    struct proj_hit *copy = PF_MALLOC(sizeof(struct proj_hit));
+    if(!copy)
+        return;
+    *copy = *hit;
+
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_PROJ_HIT,
+        .args[0] = (struct attr){
+            .type = TYPE_POINTER,
+            .val.as_pointer = copy
+        }
+    });
+}
+
+static float hz_count(enum combat_hz hz)
+{
+    switch(hz) {
+    case COMBAT_HZ_10:    return 10.0f;
+    case COMBAT_HZ_5:     return 5.0f;
+    case COMBAT_HZ_1:     return 1.0f;
+    case COMBAT_HZ_HALF:  return 0.5f;
+    default: assert(0);
+    }
+    return 0;
+}
+
+/*****************************************************************************/
+/* EXTERN FUNCTIONS                                                          */
+/*****************************************************************************/
+
+bool G_Combat_Init(const struct map *map)
+{
+    if(NULL == (s_entity_state_table = kh_init(state)))
+        return false;
+
+    memset(&s_combat_work, 0, sizeof(s_combat_work));
+    if(!stalloc_init(&s_combat_work.mem))
+        goto fail_stack;
+
+    if(!queue_cmd_init(&s_combat_commands, 256))
+        goto fail_queue;
+
+    if(!si_init(&s_stringpool, &s_stridx, 512))
+        goto fail_strintern;
+
+    struct map_resolution res;
+    M_GetResolution(map, &res);
+
+    for(int i = 0; i < MAX_FACTIONS; i++) {
+        s_fac_refcnts[i] = PF_CALLOC((res.chunk_w * X_BINS_PER_CHUNK) 
+                                * (res.chunk_h * Z_BINS_PER_CHUNK) 
+                                * sizeof(uint16_t), 1);
+        if(!s_fac_refcnts[i])
+            goto fail_refcnts;
+    }
+
+    vec_entity_init(&s_dying_ents);
+    E_Global_Register(EVENT_1HZ_TICK, on_1hz_tick, NULL, G_RUNNING);
+    register_callback_for_hz(s_combat_hz);
+    E_Global_Register(SDL_MOUSEBUTTONDOWN, on_mousedown, NULL, G_RUNNING);
+    E_Global_Register(EVENT_RENDER_3D_POST, on_render_3d, NULL, G_ALL);
+    E_Global_Register(EVENT_PROJECTILE_HIT, on_proj_hit, NULL, G_RUNNING);
+    s_map = map;
+    combat_copy_gamestate();
+    vec_corpse_init(&s_corpses);
+    return true;
+
+fail_refcnts:
+    for(int i = 0; i < MAX_FACTIONS; i++)
+        PF_FREE(s_fac_refcnts[i]);
+    si_shutdown(&s_stringpool, s_stridx);
+fail_strintern:
+    queue_cmd_destroy(&s_combat_commands);
+fail_queue:
+    stalloc_destroy(&s_combat_work.mem);
+fail_stack:
+    kh_destroy(state, s_entity_state_table);
+    return false;
+}
+
+void G_Combat_Shutdown(void)
+{
+    combat_complete_work();
+    s_map = NULL;
+
+    E_Global_Unregister(EVENT_1HZ_TICK, on_1hz_tick);
+    unregister_callback_for_hz(s_combat_hz);
+    E_Global_Unregister(SDL_MOUSEBUTTONDOWN, on_mousedown);
+    E_Global_Unregister(EVENT_RENDER_3D_POST, on_render_3d);
+    E_Global_Unregister(EVENT_PROJECTILE_HIT, on_proj_hit);
+
+    uint32_t uid;
+    kh_foreach_key(s_entity_state_table, uid, {
+        E_Entity_Unregister(EVENT_UPDATE_START, uid, on_attack_anim_tick);
+        E_Entity_Unregister(EVENT_ANIM_CYCLE_FINISHED, uid, on_death_anim_finish);
+    });
+
+    combat_release_gamestate();
+    vec_entity_destroy(&s_dying_ents);
+    for(int i = 0; i < MAX_FACTIONS; i++) {
+        PF_FREE(s_fac_refcnts[i]);
+    }
+    queue_cmd_destroy(&s_combat_commands);
+    stalloc_destroy(&s_combat_work.mem);
+    kh_destroy(state, s_entity_state_table);
+
+    vec_corpse_destroy(&s_corpses);
+    si_shutdown(&s_stringpool, s_stridx);
+}
+
+bool G_Combat_HasWork(void)
+{
+    return (queue_size(s_combat_commands) > 0);
+}
+
+bool G_Combat_GetHPDisplay(uint32_t uid, int *out_curr, int *out_max)
+{
+    ASSERT_IN_MAIN_THREAD();
+
+    struct combatstate *cs = combatstate_get(uid);
+    if(!cs)
+        return false;
+    *out_curr = cs->current_hp;
+    *out_max  = cs->stats.max_hp;
+    return true;
+}
+
+void G_Combat_FlushWork(void)
+{
+    if(!s_map)
+        return;
+    combat_finish_work();
+    combat_process_cmds();
+}
+
+void G_Combat_AddEntity(uint32_t uid, enum combat_stance initial)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_ADD,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = initial
+        }
+    });
+}
+
+void G_Combat_RemoveEntity(uint32_t uid)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_REMOVE,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        }
+    });
+}
+
+void G_Combat_SetStance(uint32_t uid, enum combat_stance stance)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_STANCE,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = stance
+        }
+    });
+}
+
+enum combat_stance G_Combat_GetStance(uint32_t uid)
+{
+    struct combat_cmd *cmd = snoop_most_recent_command(COMBAT_CMD_SET_STANCE,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return cmd->args[1].val.as_int;
+    }
+    cmd = snoop_most_recent_command(COMBAT_CMD_ADD,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return cmd->args[1].val.as_int;
+    }
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    return cs->stance;
+}
+
+void G_Combat_ClearSavedMoveCmd(uint32_t uid)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_CLEAR_SAVED_MOVE_CMD,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        }
+    });
+}
+
+int G_Combat_CurrContextualAction(void)
+{
+    uint32_t hovered = G_Sel_GetHovered();
+    if(!G_EntityExists(hovered))
+        return CTX_ACTION_NONE;
+
+    if(M_MouseOverMinimap(s_map))
+        return CTX_ACTION_NONE;
+
+    int mouse_x, mouse_y;
+    SDL_GetMouseState(&mouse_x, &mouse_y);
+    if(S_UI_MouseOverWindow(mouse_x, mouse_y))
+        return CTX_ACTION_NONE;
+
+    enum selection_type sel_type;
+    const vec_entity_t *sel = G_Sel_Get(&sel_type);
+
+    if(vec_size(sel) == 0 || sel_type != SELECTION_TYPE_PLAYER)
+        return CTX_ACTION_NONE;
+
+    uint32_t first = vec_AT(sel, 0);
+    uint32_t flags = G_FlagsGet(first);
+
+    if(!(flags & ENTITY_FLAG_COMBATABLE))
+        return CTX_ACTION_NONE;
+
+    if(G_Combat_GetBaseDamage(first) == 0)
+        return CTX_ACTION_NONE;
+
+    if(G_GetFactionID(first) == G_GetFactionID(hovered))
+        return CTX_ACTION_NONE;
+
+    if((G_FlagsGet(hovered) & ENTITY_FLAG_MARKER) || (G_FlagsGet(hovered) & ENTITY_FLAG_ZOMBIE))
+        return CTX_ACTION_NONE;
+
+    bool can_target = (G_FlagsGet(hovered) & ENTITY_FLAG_MOVABLE) 
+                  && !(G_FlagsGet(hovered) & ENTITY_FLAG_RESOURCE);
+    if(!(G_FlagsGet(hovered) & ENTITY_FLAG_COMBATABLE) && !can_target)
+        return CTX_ACTION_NONE;
+
+    if(!(G_FlagsGet(hovered) & ENTITY_FLAG_COMBATABLE) && can_target)
+        return CTX_ACTION_NO_ATTACK;
+
+    if(enemies(hovered, first)) {
+        return CTX_ACTION_ATTACK;
+    }else{
+        return CTX_ACTION_NO_ATTACK;
+    }
+}
+
+bool G_Combat_Idle(uint32_t uid)
+{
+    struct combatstate *cs = combatstate_get(uid);
+    if(!cs)
+        return true;
+    return (cs->state == STATE_NOT_IN_COMBAT);
+}
+
+void G_Combat_AttackUnit(uint32_t uid, uint32_t target)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_ATTACK_UNIT,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = target
+        }
+    });
+}
+
+void G_Combat_StopAttack(uint32_t uid)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_STOP_ATTACK,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        }
+    });
+}
+
+void G_Combat_AddTimeDelta(uint32_t delta)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_ADD_TIME_DELTA,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = delta
+        }
+    });
+}
+
+void G_Combat_AddRef(int faction_id, vec2_t pos)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_ADD_REF,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = faction_id
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_VEC2,
+            .val.as_vec2 = pos
+        }
+    });
+}
+
+void G_Combat_RemoveRef(int faction_id, vec2_t pos)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_REMOVE_REF,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = faction_id
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_vec2 = pos
+        }
+    });
+}
+
+void G_Combat_UpdateRef(int oldfac, int newfac, vec2_t pos)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_UPDATE_REF,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = oldfac
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = newfac
+        },
+        .args[2] = (struct attr){
+            .type = TYPE_VEC2,
+            .val.as_vec2 = pos
+        }
+    });
+}
+
+bool G_Combat_IsDying(uint32_t uid)
+{
+    struct combatstate *cs = combatstate_get(uid);
+    if(!cs)
+        return false;
+    return (cs->state == STATE_DEATH_ANIM_PLAYING);
+}
+
+int G_Combat_GetCurrentHP(uint32_t uid)
+{
+    struct combat_cmd *cmd;
+    cmd = snoop_most_recent_command(COMBAT_CMD_SET_CURRENT_HP,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return cmd->args[1].val.as_int;
+    }
+    cmd = snoop_most_recent_command(COMBAT_CMD_ADD,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return 0;
+    }
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    return cs->current_hp;
+}
+
+void G_Combat_SetBaseArmour(uint32_t uid, float armour_pc)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_BASE_ARMOUR,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_FLOAT,
+            .val.as_float = armour_pc
+        }
+    });
+}
+
+float G_Combat_GetBaseArmour(uint32_t uid)
+{
+    struct combat_cmd *cmd;
+    cmd = snoop_most_recent_command(COMBAT_CMD_SET_BASE_ARMOUR,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return cmd->args[1].val.as_float;
+    }
+    cmd = snoop_most_recent_command(COMBAT_CMD_ADD,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return 0.0f;
+    }
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    return cs->stats.base_armour_pc;
+}
+
+void G_Combat_SetBaseDamage(uint32_t uid, int dmg)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_BASE_DAMAGE,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = dmg
+        }
+    });
+}
+
+int G_Combat_GetBaseDamage(uint32_t uid)
+{
+    struct combat_cmd *cmd;
+    cmd = snoop_most_recent_command(COMBAT_CMD_SET_BASE_DAMAGE,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return cmd->args[1].val.as_int;
+    }
+    cmd = snoop_most_recent_command(COMBAT_CMD_ADD,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return 0;
+    }
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    return cs->stats.base_dmg;
+}
+
+void G_Combat_SetCurrentHP(uint32_t uid, int hp)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_CURRENT_HP,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = hp
+        }
+    });
+}
+
+void G_Combat_SetMaxHP(uint32_t uid, int hp)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_MAX_HP,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = hp
+        }
+    });
+}
+
+int G_Combat_GetMaxHP(uint32_t uid)
+{
+    struct combat_cmd *cmd;
+    cmd = snoop_most_recent_command(COMBAT_CMD_SET_MAX_HP,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return cmd->args[1].val.as_int;
+    }
+    cmd = snoop_most_recent_command(COMBAT_CMD_ADD,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return 0;
+    }
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    return cs->stats.max_hp;
+}
+
+void G_Combat_SetRange(uint32_t uid, float range)
+{
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_RANGE,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_FLOAT,
+            .val.as_float = range
+        }
+    });
+}
+
+void G_Combat_SetProjDesc(uint32_t uid, const struct proj_desc *pd)
+{
+    struct proj_desc *copy = PF_MALLOC(sizeof(struct proj_desc));
+    if(!copy)
+        return;
+    *copy = *pd;
+    copy->basedir = pf_strdup(pd->basedir);
+    copy->pfobj = pf_strdup(pd->pfobj);
+    if(pd->flags & PROJ_HAS_IMPACT_SPRITE) {
+        copy->impact_sprite.filename = pf_strdup(pd->impact_sprite.filename);
+    }
+    if(pd->flags & PROJ_HAS_TRAIL_SPRITE) {
+        copy->trail_sprite.filename = pf_strdup(pd->trail_sprite.filename);
+    }
+
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_PROJ_DESC,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_POINTER,
+            .val.as_pointer = copy
+        }
+    });
+}
+
+void G_Combat_SetProjFireDesc(uint32_t uid, const struct proj_fire_desc *fd)
+{
+    struct proj_fire_desc *copy = PF_MALLOC(sizeof(struct proj_fire_desc));
+    if(!copy)
+        return;
+    *copy = *fd;
+
+    combat_push_cmd((struct combat_cmd){
+        .type = COMBAT_CMD_SET_PROJ_FIRE_DESC,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_POINTER,
+            .val.as_pointer = copy
+        }
+    });
+}
+
+float G_Combat_GetRange(uint32_t uid)
+{
+    struct combat_cmd *cmd;
+    cmd = snoop_most_recent_command(COMBAT_CMD_SET_RANGE,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return cmd->args[1].val.as_float;
+    }
+    cmd = snoop_most_recent_command(COMBAT_CMD_ADD,
+        (void*)(uintptr_t)uid, uids_match);
+    if(cmd) {
+        return 0.0f;
+    }
+
+    struct combatstate *cs = combatstate_get(uid);
+    assert(cs);
+    return cs->stats.attack_range;
+}
+
+void G_Combat_SetCorpseModel(uint32_t uid, const char *dir, const char *pfobj, vec3_t scale)
+{
+    struct combat_cmd cmd = (struct combat_cmd){
+        .type = COMBAT_CMD_SET_CORPSE_MODEL,
+        .args[0] = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = uid
+        },
+        .args[1] = (struct attr){
+            .type = TYPE_STRING,
+        },
+        .args[2] = (struct attr){
+            .type = TYPE_STRING,
+        },
+        .args[3] = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = scale
+        }
+    };
+    pf_strlcpy(cmd.args[1].val.as_string, dir, sizeof(cmd.args[1].val.as_string));
+    pf_strlcpy(cmd.args[2].val.as_string, pfobj, sizeof(cmd.args[2].val.as_string));
+    combat_push_cmd(cmd);
+}
+
+struct kh_id_s *G_Combat_GetDyingSetCopy(void)
+{
+    khash_t(id) *ret = kh_init(id);
+    if(!ret)
+        return NULL;
+
+    uint32_t key;
+    struct combatstate curr;
+
+    kh_foreach(s_entity_state_table, key, curr, {
+        if(curr.state == STATE_DEATH_ANIM_PLAYING) {
+
+            int result;
+            khiter_t k = kh_put(id, ret, key, &result);
+            if(result == -1) {
+                kh_destroy(id, ret);
+                return NULL;
+            }
+        }
+    });
+    return ret;
+}
+
+void G_Combat_SetTickHz(enum combat_hz hz)
+{
+    s_combat_hz_dirty = (s_combat_hz != hz);
+    s_combat_hz = hz;
+}
+
+float G_Combat_GetTickHz(void)
+{
+    return hz_count(s_combat_hz);
+}
+
+bool G_Combat_SaveState(struct SDL_RWops *stream)
+{
+    struct attr num_ents = (struct attr){
+        .type = TYPE_INT,
+        .val.as_int = kh_size(s_entity_state_table)
+    };
+    CHK_TRUE_RET(Attr_Write(stream, &num_ents, "num_ents"));
+
+    uint32_t curr_ticks = SDL_GetTicks();
+    uint32_t key;
+    struct combatstate curr;
+
+    kh_foreach(s_entity_state_table, key, curr, {
+
+        assert(G_EntityExists(key));
+        struct attr uid = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = key
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &uid, "uid"));
+    
+        /* The HP is already loaded and set along with the entity */
+
+        struct attr stance = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.stance
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &stance, "stance"));
+
+        struct attr state = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.state
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &state, "state"));
+
+        struct attr sticky = (struct attr){
+            .type = TYPE_BOOL,
+            .val.as_int = curr.sticky
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &sticky, "sticky"));
+
+        struct attr target_uid = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.target_uid 
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &target_uid, "target_uid"));
+
+        struct attr move_cmd_interrupted = (struct attr){
+            .type = TYPE_BOOL,
+            .val.as_bool = curr.move_cmd_interrupted
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &move_cmd_interrupted, "move_cmd_interrupted"));
+
+        struct attr move_cmd_attacking = (struct attr){
+            .type = TYPE_BOOL,
+            .val.as_bool = curr.move_cmd_attacking
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &move_cmd_attacking, "move_cmd_attacking"));
+
+        struct attr move_cmd_xz = (struct attr){
+            .type = TYPE_VEC2,
+            .val.as_vec2 = curr.move_cmd_xz
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &move_cmd_xz, "move_cmd_xz"));
+
+        struct attr attack_elapsed_ticks = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr_ticks - curr.attack_start_tick
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &attack_elapsed_ticks, "attack_elapsed_ticks"));
+
+        struct attr pd_basedir = (struct attr){
+            .type = TYPE_STRING,
+        };
+        pf_strlcpy(pd_basedir.val.as_string, curr.pd.basedir, sizeof(pd_basedir.val.as_string));
+        CHK_TRUE_RET(Attr_Write(stream, &pd_basedir, "pd_basedir"));
+
+        struct attr pd_pfobj = (struct attr){
+            .type = TYPE_STRING,
+        };
+        pf_strlcpy(pd_pfobj.val.as_string, curr.pd.pfobj, sizeof(pd_pfobj.val.as_string));
+        CHK_TRUE_RET(Attr_Write(stream, &pd_pfobj, "pd_pfobj"));
+
+        struct attr pd_scale  = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = curr.pd.scale,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_scale, "pd_scale"));
+
+        struct attr pd_speed  = (struct attr){
+            .type = TYPE_FLOAT,
+            .val.as_float = curr.pd.speed,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_speed, "pd_speed"));
+
+        struct attr pd_flags = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.pd.flags,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_flags, "pd_flags"));
+        Sched_TryYield();
+
+        CHK_TRUE_RET(Sprite_SaveDesc(&curr.pd.impact_sprite, stream));
+
+        struct attr pd_impact_size = (struct attr){
+            .type = TYPE_VEC2,
+            .val.as_vec2 = curr.pd.impact_size,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_impact_size, "pd_impact_size"));
+
+        CHK_TRUE_RET(Sprite_SaveDesc(&curr.pd.trail_sprite, stream));
+
+        struct attr pd_trail_size = (struct attr){
+            .type = TYPE_VEC2,
+            .val.as_vec2 = curr.pd.trail_size,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_trail_size, "pd_trail_size"));
+
+        struct attr pd_trail_freq = (struct attr){
+            .type = TYPE_FLOAT,
+            .val.as_float = curr.pd.trail_freq,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &pd_trail_freq, "pd_trail_freq"));
+        Sched_TryYield();
+
+        struct attr fd_frame_offset  = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.fd.frame_offset,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &fd_frame_offset, "fd_frame_offset"));
+
+        struct attr fd_fire_mode  = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr.fd.fire_mode,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &fd_fire_mode, "fd_fire_mode"));
+
+        struct attr fd_bone_name  = (struct attr){
+            .type = TYPE_STRING,
+        };
+        pf_strlcpy(fd_bone_name.val.as_string, curr.fd.bone_name,
+            sizeof(fd_bone_name.val.as_string));
+        CHK_TRUE_RET(Attr_Write(stream, &fd_bone_name, "fd_bone_name"));
+
+        struct attr fd_offset  = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = curr.fd.offset,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &fd_offset, "fd_offset"));
+        Sched_TryYield();
+
+        struct attr corpse_basedir = (struct attr){
+            .type = TYPE_STRING,
+            .val.as_string = "NULL"
+        };
+        if(curr.corpse_dir) {
+            pf_strlcpy(corpse_basedir.val.as_string, curr.corpse_dir, 
+                sizeof(corpse_basedir.val.as_string));
+        }
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_basedir, "corpse_basedir"));
+
+        struct attr corpse_pfobj = (struct attr){
+            .type = TYPE_STRING,
+            .val.as_string = "NULL"
+        };
+        if(curr.corpse_pfobj) {
+            pf_strlcpy(corpse_pfobj.val.as_string, curr.corpse_pfobj, 
+                sizeof(corpse_pfobj.val.as_string));
+        }
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_pfobj, "corpse_pfobj"));
+
+        struct attr corpse_scale  = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = curr.corpse_scale,
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_scale, "corpse_scale"));
+        Sched_TryYield();
+    });
+
+    struct attr num_dying = (struct attr){
+        .type = TYPE_INT,
+        .val.as_int = vec_size(&s_dying_ents)
+    };
+    CHK_TRUE_RET(Attr_Write(stream, &num_dying, "num_dying"));
+    Sched_TryYield();
+
+    for(int i = 0; i < vec_size(&s_dying_ents); i++) {
+    
+        uint32_t curr_ent = vec_AT(&s_dying_ents, i);
+        struct attr uid = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = curr_ent
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &uid, "dying_ent_uid"));
+        Sched_TryYield();
+    }
+
+    struct attr num_corpses = (struct attr){
+        .type = TYPE_INT,
+        .val.as_int = vec_size(&s_corpses)
+    };
+    CHK_TRUE_RET(Attr_Write(stream, &num_corpses, "num_corpses"));
+    Sched_TryYield();
+
+    for(int i = 0; i < vec_size(&s_corpses); i++) {
+
+        uint32_t corpse_ent = vec_AT(&s_corpses, i).uid;
+        struct attr corpse_ent_attr = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = corpse_ent
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_ent_attr, "corpse_ent"));
+
+        uint32_t secs_left = vec_AT(&s_corpses, i).secs_left;
+        struct attr secs_left_attr = (struct attr){
+            .type = TYPE_INT,
+            .val.as_int = secs_left
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &secs_left_attr, "secs_left"));
+
+        struct attr corpse_loc_attr = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = G_Pos_Get(corpse_ent)
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_loc_attr, "corpse_loc"));
+
+        struct attr corpse_rot_attr = (struct attr){
+            .type = TYPE_QUAT,
+            .val.as_quat = Entity_GetRot(corpse_ent)
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_rot_attr, "corpse_rot"));
+
+        struct attr corpse_scale_attr = (struct attr){
+            .type = TYPE_VEC3,
+            .val.as_vec3 = Entity_GetScale(corpse_ent)
+        };
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_scale_attr, "corpse_scale"));
+
+        struct attr corpse_dir = (struct attr){
+            .type = TYPE_STRING,
+        };
+        const char *dir = vec_AT(&s_corpses, i).dir;
+        pf_strlcpy(corpse_dir.val.as_string, dir, sizeof(corpse_dir.val.as_string));
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_dir, "corpse_dir"));
+
+        struct attr corpse_pfobj = (struct attr){
+            .type = TYPE_STRING,
+        };
+        const char *pfobj = vec_AT(&s_corpses, i).pfobj;
+        pf_strlcpy(corpse_pfobj.val.as_string, pfobj, sizeof(corpse_pfobj.val.as_string));
+        CHK_TRUE_RET(Attr_Write(stream, &corpse_pfobj, "corpse_pfobj"));
+
+        Sched_TryYield();
+    }
+    return true;
+}
+
+bool G_Combat_LoadState(struct SDL_RWops *stream)
+{
+    /* Flush the commands submitted during loading */
+    combat_update_gamestate();
+    combat_process_cmds();
+
+    struct attr attr;
+
+    CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+    CHK_TRUE_RET(attr.type == TYPE_INT);
+    Sched_TryYield();
+
+    const size_t num_ents = attr.val.as_int;
+    uint32_t curr_ticks = SDL_GetTicks();
+
+    for(int i = 0; i < num_ents; i++) {
+    
+        uint32_t uid;
+        struct combatstate *cs;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        uid = attr.val.as_int;
+
+        /* The entity should have already been loaded from the scripting state */
+        khiter_t k = kh_get(state, s_entity_state_table, uid);
+        CHK_TRUE_RET(k != kh_end(s_entity_state_table));
+        cs = &kh_value(s_entity_state_table, k);
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->stance = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->state = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_BOOL);
+        cs->sticky = attr.val.as_bool;
+
+        if(cs->state == STATE_ATTACK_ANIM_PLAYING) {
+            CHK_TRUE_RET(G_EntityExists(uid));
+            E_Entity_Register(EVENT_UPDATE_START, uid, on_attack_anim_tick, 
+                (void*)((uintptr_t)uid), G_RUNNING);
+        }
+
+        /* Re-establish the attack-notified invariant for an entity reloaded mid-attack
+         * and re-emit the start so the client scripts resume the attack animation. The
+         * event only reaches the G_RUNNING-masked handlers when running, but the flag
+         * must track the state regardless so the pairing asserts hold. */
+        if(cs->state == STATE_CAN_ATTACK || cs->state == STATE_ATTACK_ANIM_PLAYING) {
+            combat_notify_attack_start(uid, cs);
+        }
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->target_uid = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_BOOL);
+        cs->move_cmd_interrupted = attr.val.as_bool;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_BOOL);
+        cs->move_cmd_attacking = attr.val.as_bool;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC2);
+        cs->move_cmd_xz = attr.val.as_vec2;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->attack_start_tick = curr_ticks - attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_STRING);
+        cs->pd.basedir = pf_strdup(attr.val.as_string);
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_STRING);
+        cs->pd.pfobj = pf_strdup(attr.val.as_string);
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC3);
+        cs->pd.scale = attr.val.as_vec3;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_FLOAT);
+        cs->pd.speed = attr.val.as_float;
+        Sched_TryYield();
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->pd.flags = attr.val.as_int;
+
+        CHK_TRUE_RET(Sprite_LoadDesc(&cs->pd.impact_sprite, stream));
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC2);
+        cs->pd.impact_size = attr.val.as_vec2;
+
+        CHK_TRUE_RET(Sprite_LoadDesc(&cs->pd.trail_sprite, stream));
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC2);
+        cs->pd.trail_size = attr.val.as_vec2;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_FLOAT);
+        cs->pd.trail_freq = attr.val.as_float;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->fd.frame_offset = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        cs->fd.fire_mode = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_STRING);
+        cs->fd.bone_name[0] = 0;
+        if(strcmp(attr.val.as_string, "NULL") != 0) {
+            pf_strlcpy(cs->fd.bone_name, attr.val.as_string, sizeof(cs->fd.bone_name));
+        }
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC3);
+        cs->fd.offset = attr.val.as_vec3;
+        Sched_TryYield();
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_STRING);
+        cs->corpse_dir = NULL;
+        if(strcmp(attr.val.as_string, "NULL") != 0) {
+            const char *dirkey = si_intern(attr.val.as_string, &s_stringpool, s_stridx);
+            if(dirkey) {
+                cs->corpse_dir = dirkey;
+            }
+        }
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_STRING);
+        cs->corpse_pfobj = NULL;
+        if(strcmp(attr.val.as_string, "NULL") != 0) {
+            const char *objkey = si_intern(attr.val.as_string, &s_stringpool, s_stridx);
+            if(objkey) {
+                cs->corpse_pfobj = objkey;
+            }
+        }
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC3);
+        cs->corpse_scale = attr.val.as_vec3;
+        Sched_TryYield();
+    }
+
+    CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+    CHK_TRUE_RET(attr.type == TYPE_INT);
+    const size_t num_dying = attr.val.as_int;
+    Sched_TryYield();
+
+    for(int i = 0; i < num_dying; i++) {
+    
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        uint32_t uid = attr.val.as_int;
+        CHK_TRUE_RET(G_EntityExists(uid));
+        vec_entity_push(&s_dying_ents, uid);
+
+        uint32_t flags = G_FlagsGet(uid);
+        if(flags & ENTITY_FLAG_ANIMATED) {
+            E_Entity_Register(EVENT_ANIM_CYCLE_FINISHED, uid, on_death_anim_finish, 
+                (void*)((uintptr_t)uid), G_RUNNING);
+        }else{
+            Entity_DisappearAnimated(uid, s_map, on_disappear_finish, 
+                (void*)((uintptr_t)uid));
+        }
+        Sched_TryYield();
+    }
+
+    CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+    CHK_TRUE_RET(attr.type == TYPE_INT);
+    const size_t num_corpses = attr.val.as_int;
+    Sched_TryYield();
+
+    for(int i = 0; i < num_corpses; i++) {
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        uint32_t uid = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_INT);
+        uint32_t secs_left = attr.val.as_int;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC3);
+        vec3_t corpse_pos = attr.val.as_vec3;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_QUAT);
+        quat_t corpse_rot = attr.val.as_quat;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_VEC3);
+        vec3_t corpse_scale = attr.val.as_vec3;
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_STRING);
+        const char *dirkey = si_intern(attr.val.as_string, &s_stringpool, s_stridx);
+
+        CHK_TRUE_RET(Attr_Parse(stream, &attr, true));
+        CHK_TRUE_RET(attr.type == TYPE_STRING);
+        const char *objkey = si_intern(attr.val.as_string, &s_stringpool, s_stridx);
+
+        if(dirkey && objkey) {
+            add_corpse(dirkey, objkey, secs_left, corpse_pos, corpse_scale, corpse_rot); 
+        }
+        Sched_TryYield();
+    }
+
+    return true;
+}
+

@@ -1,0 +1,3 @@
+C:\msys64\mingw64\bin\cmake.exe -E rm -f CMakeFiles\online_smoke_test.dir/objects.a
+C:\msys64\mingw64\bin\ar.exe qc CMakeFiles\online_smoke_test.dir/objects.a @CMakeFiles\online_smoke_test.dir\objects1.rsp
+C:\msys64\mingw64\bin\c++.exe -O3 -DNDEBUG -Wl,--whole-archive CMakeFiles\online_smoke_test.dir/objects.a -Wl,--no-whole-archive -o online_smoke_test.exe -Wl,--out-implib,libonline_smoke_test.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\online_smoke_test.dir\linkLibs.rsp

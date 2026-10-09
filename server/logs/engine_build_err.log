@@ -1,0 +1,7 @@
+致命错误：不是 Git 仓库（或者直至挂载点 / 的任何父目录）
+停止在文件系统边界（未设置 GIT_DISCOVERY_ACROSS_FILESYSTEM）。
+C:\msys64\mingw64\bin\ar.exe: `u' modifier ignored since `D' is the default (see `U')
+C:\msys64\mingw64\bin\ar.exe: `u' modifier ignored since `D' is the default (see `U')
+C:\msys64\mingw64\bin\ar.exe: `u' modifier ignored since `D' is the default (see `U')
+configure: error: python2.7 interpreter not found
+make: *** [Makefile:242：lib/libpython2.7.dll] 错误 1

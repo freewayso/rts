@@ -1,0 +1,11 @@
+# Android build outputs
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/app/src/main/assets/shaders_es/
+*.apk
+*.ap_
+*.dex
+*.so
+!jni/

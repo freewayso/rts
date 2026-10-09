@@ -1,0 +1,48 @@
+﻿ *** [API][Other][Notification] Buffer detailed info: Buffer object 1 (bound to GL_ARRAY_BUFFER_ARB, usage hint is GL_STATIC_DRAW) will use VIDEO memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 2 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 2 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 3 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 3 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 5 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 5 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 6 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) will use SYSTEM HEAP memory as the source for buffer object operations.
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 6 (bound to GL_TEXTURE_BUFFER, usage hint is GL_DYNAMIC_DRAW) has been mapped WRITE_ONLY in SYSTEM HEAP memory (fast).
+ *** [API][Other][Notification] Buffer detailed info: Buffer object 9 (bound to GL_ARRAY_BUFFER_ARB, usage hint is GL_STATIC_DRAW) will use VIDEO memory as the source for buffer object operations.
+[script] S_RunFile path=D:/study/permafrost-engine-master/scripts/rts/match_online.py
+[script] PyRun_String begin path=D:/study/permafrost-engine-master/scripts/rts/match_online.py bytes=15090
+[match_online] camera -> faction 2 at (403.6, -392.3) n=16
+[match_online] multiplayer role=join port=27791 players=2 seed=42 fac=2
+[match_online] selected 16/16 own units for ActionPad
+[script] PyRun_String done ok=1
+[mp] joining 127.0.0.1:27791 as Join fac=2
+[match_online] selected 16/16 own units for ActionPad
+[mp] players=8
+[mp] match_start seed=42 players=2 local=1
+  slot=1 fac=2 name=Join ready=0
+[match_online] lockstep_init seed=42 local=1 players=2 host=0
+[lockstep] READY sent local=1
+[mp] lockstep active seed=42 local=1 players=2 host=0
+[lockstep] GO_ACK from player=0
+[lockstep] sim START
+[lockstep] recv CMD tick=10 from=0 cmds=0
+[lockstep] recv CMD tick=10 from=1 cmds=0
+[lockstep] recv CMD tick=20 from=0 cmds=0
+[lockstep] recv CMD tick=20 from=1 cmds=0
+[lockstep] recv CMD tick=30 from=1 cmds=0
+[lockstep] recv CMD tick=30 from=0 cmds=0
+[lockstep] recv CMD tick=40 from=1 cmds=0
+[lockstep] recv CMD tick=40 from=0 cmds=0
+[lockstep] recv CMD tick=50 from=1 cmds=0
+[lockstep] recv CMD tick=50 from=0 cmds=0
+[lockstep] recv CMD tick=60 from=1 cmds=0
+[lockstep] recv CMD tick=60 from=0 cmds=0
+[lockstep] recv CMD tick=70 from=1 cmds=0
+[lockstep] recv CMD tick=70 from=0 cmds=0
+[lockstep] recv CMD tick=80 from=1 cmds=0
+[lockstep] recv CMD tick=80 from=0 cmds=0
+[lockstep] recv CMD tick=90 from=1 cmds=0
+[lockstep] recv CMD tick=90 from=0 cmds=0
+[lockstep] recv CMD tick=100 from=1 cmds=0
+[lockstep] recv CMD tick=100 from=0 cmds=0
+[lockstep] recv CMD tick=110 from=1 cmds=0
+[lockstep] recv CMD tick=110 from=0 cmds=0
