@@ -136,6 +136,19 @@ The compliation can either be done on a Linux host, or natively on Windows using
 
 Alternatively, a Visual Studio 2022 solution file is provided in the root directory of the project.
 
+#### Local online build / launch / dual-client test (this fork) ####
+
+Step-by-step (engine + login/room servers + two lobby UIs):
+
+See **[docs/local_build_test.md](docs/local_build_test.md)**.
+
+Quick start after binaries exist:
+
+```powershell
+cd server
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_local_test.ps1 -Clients 2
+```
+
 ## Devlog ##
 
 Follow the development of Permafrost Engine and EVERGLORY on [YouTube](https://www.youtube.com/channel/UCNklkpsPnNpRhC9oVkpIpLA).

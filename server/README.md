@@ -1,5 +1,9 @@
 # Permafrost online servers (Login + Room Relay)
 
+完整「编译引擎 + 编译服务器 + 一键双端联机测试」步骤见：
+
+**[docs/local_build_test.md](../docs/local_build_test.md)**
+
 ## Build (MinGW / MSVC / Linux)
 
 ```bash
