@@ -121,7 +121,7 @@ static inline unsigned simd_popcount32(unsigned x)
  * equivalent the macro is empty and SIMD_HAS_TARGET_* is 0; callers should
  * gate the wider variant accordingly.
  */
-#if defined(__GNUC__) || defined(__clang__)
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
 #  define SIMD_TARGET_AVX2    __attribute__((target("avx2")))
 #  define SIMD_HAS_TARGET_AVX2 1
 #  define SIMD_TARGET_AVX512F __attribute__((target("avx512f,avx512vl,avx512bw,avx512dq")))
@@ -133,6 +133,15 @@ static inline unsigned simd_popcount32(unsigned x)
 #  define SIMD_HAS_TARGET_AVX512F 0
 #endif
 
+/* Portable prefetch. On x86 use _mm_prefetch; elsewhere __builtin_prefetch. */
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+#  define SIMD_PREFETCH(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
+#elif defined(__GNUC__) || defined(__clang__)
+#  define SIMD_PREFETCH(addr) __builtin_prefetch((const void*)(addr), 0, 3)
+#else
+#  define SIMD_PREFETCH(addr) ((void)0)
+#endif
+
 /* Returns non-zero if the current CPU supports AVX2. Cached after the first
  * call; the race between concurrent first-callers is harmless since they
  * all compute and write the same value.
@@ -142,7 +151,7 @@ static inline int simd_avx2_supported(void)
     static int s_cached = -1;
     if(s_cached >= 0)
         return s_cached;
-#if defined(__GNUC__) || defined(__clang__)
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     __builtin_cpu_init();
     s_cached = __builtin_cpu_supports("avx2") ? 1 : 0;
 #elif defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
@@ -158,6 +167,7 @@ static inline int simd_avx2_supported(void)
         }
     }
 #else
+    /* Android / aarch64 / non-x86: no AVX2 */
     s_cached = 0;
 #endif
     return s_cached;
@@ -172,7 +182,7 @@ static inline int simd_avx512_supported(void)
     static int s_cached = -1;
     if(s_cached >= 0)
         return s_cached;
-#if defined(__GNUC__) || defined(__clang__)
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     __builtin_cpu_init();
     s_cached = (__builtin_cpu_supports("avx512f")
              && __builtin_cpu_supports("avx512bw")

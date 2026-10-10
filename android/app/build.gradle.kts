@@ -6,6 +6,8 @@ plugins {
 android {
     namespace = "com.permafrost.engine"
     compileSdk = 34
+    // Match installed NDK (folder may be linked as 26.3.11579264 / r26d)
+    ndkVersion = "26.3.11579264"
 
     defaultConfig {
         applicationId = "com.permafrost.engine"
@@ -20,7 +22,9 @@ android {
                 cFlags += listOf("-D__ANDROID__", "-DPF_GLES", "-DPF_ANDROID_FULL", "-DPF_NO_PYTHON", "-DPF_GLES_WATER_FX=0")
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
-                    "-DANDROID_ARM_NEON=TRUE"
+                    "-DANDROID_ARM_NEON=TRUE",
+                    "-DPF_ANDROID_LINK_ENGINE=ON",
+                    "-DPF_ANDROID_ENGINE_BATCH=2"
                 )
             }
         }

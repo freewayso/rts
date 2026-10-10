@@ -119,6 +119,8 @@ SDL_Thread *R_Run(struct render_sync_state *rstate);
 /* Must be set up before creating the window */
 void        R_InitAttributes(void);
 bool        R_ComputeShaderSupported(void);
+/* Android / PF_GLES: init GL subsystems on an already-current EGL context (no SDL window). */
+bool        R_InitFromCurrentContext(int width, int height);
 
 void       *R_PushArg(const void *src, size_t size);
 void       *R_AllocArg(size_t size);

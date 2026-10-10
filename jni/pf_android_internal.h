@@ -16,6 +16,7 @@ void pf_android_engine_touch(int type, float x, float y, int id);
 void pf_android_engine_set_quality(int level);
 bool pf_android_engine_water_fx_enabled(void);
 const char *pf_android_engine_map_path(void);
+bool pf_android_engine_is_playing(void);
 
 void pf_rts_slice_reset(void);
 void pf_rts_slice_on_touch(int type, float x, float y, int pointer_id);

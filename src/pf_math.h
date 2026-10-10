@@ -36,7 +36,11 @@
 #ifndef PF_MATH_H
 #define PF_MATH_H
 
+#if defined(__ANDROID__) || defined(PF_GLES)
+#include <GLES3/gl3.h> /* GLfloat */
+#else
 #include <GL/glew.h> /* GLfloat definition */
+#endif
 #include <stdio.h>   /* FILE definition    */
 #ifndef _USE_MATH_DEFINES
     #define _USE_MATH_DEFINES

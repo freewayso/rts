@@ -862,6 +862,49 @@ SDL_Thread *R_Run(struct render_sync_state *rstate)
     return SDL_CreateThread(render, "render", rstate);
 }
 
+bool R_InitFromCurrentContext(int width, int height)
+{
+    /* Used by Android GLSurfaceView: EGL context is already current on this thread. */
+    struct render_init_arg arg = {
+        .in_window = NULL,
+        .in_width = width > 0 ? width : 1280,
+        .in_height = height > 0 ? height : 720,
+        .out_success = false,
+    };
+
+#if defined(__ANDROID__) || defined(PF_GLES)
+    if(!GLES_Loader_Init()) {
+        fprintf(stderr, "Failed to initialize GLES loader\n");
+        return false;
+    }
+#else
+    (void)arg;
+    return false;
+#endif
+
+    int vp[4] = {0, 0, arg.in_width, arg.in_height};
+    R_GL_SetViewport(&vp[0], &vp[1], &vp[2], &vp[3]);
+    R_GL_GlobalConfig();
+
+    if(!R_GL_Shader_InitAll(g_basepath)
+    || !R_GL_Texture_Init()
+    || !R_GL_StateInit()
+    || !R_GL_Batch_Init()
+    || !R_GL_AnimInit()
+    || !R_GL_SwapchainInit()) {
+        return false;
+    }
+
+    R_GL_InitShadows();
+
+    strncpy(s_info_vendor,     (const char*)glGetString(GL_VENDOR),   ARR_SIZE(s_info_vendor)-1);
+    strncpy(s_info_renderer,   (const char*)glGetString(GL_RENDERER), ARR_SIZE(s_info_renderer)-1);
+    strncpy(s_info_version,    (const char*)glGetString(GL_VERSION),  ARR_SIZE(s_info_version)-1);
+    strncpy(s_info_sl_version, (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION), ARR_SIZE(s_info_sl_version)-1);
+
+    return true;
+}
+
 void *R_PushArg(const void *src, size_t size)
 {
     struct render_workspace *ws = (SDL_ThreadID() == g_render_thread_id) ? G_GetRenderWS() 

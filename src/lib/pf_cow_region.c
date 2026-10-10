@@ -48,6 +48,29 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
+#if defined(__ANDROID__)
+#include <sys/syscall.h>
+#include <linux/unistd.h>
+#ifndef __NR_memfd_create
+#  if defined(__aarch64__)
+#    define __NR_memfd_create 279
+#  elif defined(__arm__)
+#    define __NR_memfd_create 385
+#  elif defined(__x86_64__)
+#    define __NR_memfd_create 319
+#  endif
+#endif
+static int pf_memfd_create(const char *name, unsigned int flags)
+{
+#if defined(__NR_memfd_create)
+    return (int)syscall(__NR_memfd_create, name, flags);
+#else
+    (void)name; (void)flags;
+    return -1;
+#endif
+}
+#define memfd_create pf_memfd_create
+#endif
 #endif
 
 #include <stdlib.h>

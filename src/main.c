@@ -728,6 +728,17 @@ void Engine_WinDrawableSize(int *out_w, int *out_h)
     SDL_GL_GetDrawableSize(s_window, out_w, out_h);
 }
 
+void Engine_GetPointer(int *out_x, int *out_y)
+{
+    SDL_GetMouseState(out_x, out_y);
+}
+
+void Engine_SetPointer(int x, int y)
+{
+    if(s_window)
+        SDL_WarpMouseInWindow(s_window, x, y);
+}
+
 void Engine_FlushRenderWorkQueue(void)
 {
     ASSERT_IN_MAIN_THREAD();

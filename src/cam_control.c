@@ -364,7 +364,7 @@ static void rts_cam_on_mousewheel(void *unused, void *event_arg)
     /* When the cursor is over a UI window, the scroll belongs to that window
      * (e.g. scrolling a list); don't also zoom the camera. */
     int mouse_x, mouse_y;
-    SDL_GetMouseState(&mouse_x, &mouse_y);
+    Engine_GetPointer(&mouse_x, &mouse_y);
     if(S_UI_MouseOverWindow(mouse_x, mouse_y))
         return;
 

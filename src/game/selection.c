@@ -173,7 +173,7 @@ static void on_render_ui(void *user, void *event)
         return;
 
     int mouse_x, mouse_y;
-    SDL_GetMouseState(&mouse_x, &mouse_y);
+    Engine_GetPointer(&mouse_x, &mouse_y);
 
     vec2_t signed_size = (vec2_t){mouse_x - s_ctx.mouse_down_coord.x, mouse_y - s_ctx.mouse_down_coord.y};
     const float width = 2.0f;
@@ -291,7 +291,7 @@ static void sel_compute_hovered(struct camera *cam, const vec_entity_t *visible,
         return;
 
     int mouse_x, mouse_y;
-    SDL_GetMouseState(&mouse_x, &mouse_y);
+    Engine_GetPointer(&mouse_x, &mouse_y);
 
     vec3_t ray_origin = sel_unproject_mouse_coords(cam, (vec2_t){mouse_x, mouse_y}, -1.0f);
     vec3_t ray_far    = sel_unproject_mouse_coords(cam, (vec2_t){mouse_x, mouse_y}, 1.0f);

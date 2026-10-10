@@ -214,9 +214,11 @@ void pf_android_frame(void)
 #if defined(PF_ANDROID_FULL)
     if(s_mode == PF_MODE_ENGINE) {
         extern void pf_android_engine_frame(void);
+        extern bool pf_android_engine_is_playing(void);
         pf_android_engine_frame();
-        /* Until full render is linked, keep GLES triangle visible */
-        stub_draw_frame();
+        /* Full RTS owns the framebuffer when playing; otherwise keep stub triangle. */
+        if(!pf_android_engine_is_playing())
+            stub_draw_frame();
         s_frame++;
         return;
     }

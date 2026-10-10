@@ -36,7 +36,16 @@
 #include "mem.h"
 
 #include <SDL.h>
+#if defined(__ANDROID__) || defined(PF_NO_MIMALLOC)
+/* Android batch: libc allocator until mimalloc is built for NDK. */
+#include <stdlib.h>
+#define mi_malloc       malloc
+#define mi_calloc       calloc
+#define mi_realloc      realloc
+#define mi_free         free
+#else
 #include <mimalloc.h>
+#endif
 
 #include <assert.h>
 #include <string.h>
@@ -294,6 +303,7 @@ void Mem_Free(void *p)
     mi_free(h);
 }
 
+#if !defined(__ANDROID__) && !defined(PF_NO_MIMALLOC)
 static bool audit_block_visitor(const mi_heap_t *heap, const mi_heap_area_t *area,
                                 void *block, size_t block_size, void *arg)
 {
@@ -312,11 +322,17 @@ static bool audit_block_visitor(const mi_heap_t *heap, const mi_heap_area_t *are
     out->sub_count[sys][sub] += 1;
     return true;
 }
+#endif
 
 void Mem_AuditTaggedBytes(struct mem_accounting *out)
 {
     memset(out, 0, sizeof(*out));
+#if !defined(__ANDROID__) && !defined(PF_NO_MIMALLOC)
     mi_heap_visit_blocks(mi_heap_get_default(), true, audit_block_visitor, out);
+#else
+    /* No mimalloc heap walk on Android stub allocator — counters already tracked. */
+    Mem_GetAccounting(out);
+#endif
 }
 
 void Mem_GetAccounting(struct mem_accounting *out)

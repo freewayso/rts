@@ -218,7 +218,8 @@ M5  画质/生命周期硬化；可选公网与多 ABI
 | **本文** `docs/refactor_backlog.md` | 重构功能点总清单与优先级 |
 | `docs/server_login_room_relay.md` | 登录服 / 房间转发服 / SQLite / TCP·KCP 实现方案 |
 | `docs/lockstep_*.md` | 客户端锁步设计细则 |
-| `android/README.md` | Android 工程构建说明 |
+| `android/README.md` | Android APK / `.so` 现状 + 构建说明 |
+| `docs/android_apk_so.md` | 中文摘要（指向 android/README） |
 | Cursor 计划 `android_so_port_*.plan.md` | Android 分阶段方案（勿当实现进度） |
 
 ---

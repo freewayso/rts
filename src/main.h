@@ -69,6 +69,9 @@ int  Engine_SetRes(int w, int h);
 void Engine_SetDispMode(enum pf_window_flags wf);
 void Engine_WinDrawableSize(int *out_w, int *out_h);
 void Engine_SetRenderThreadID(SDL_threadID id);
+/* Pointer position used by raycast/selection (SDL mouse on desktop; touch on Android). */
+void Engine_GetPointer(int *out_x, int *out_y);
+void Engine_SetPointer(int x, int y);
 
 /* Execute all the currently queued render commands on the render thread. 
  * Block until it completes. This is used during initialization only to 

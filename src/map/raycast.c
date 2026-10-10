@@ -122,7 +122,7 @@ struct aabb aabb_for_tile(struct tile_desc desc, const struct map *map)
 static vec3_t rc_unproject_mouse_coords(float ndc_z)
 {
     int mouse_x, mouse_y;
-    SDL_GetMouseState(&mouse_x, &mouse_y);
+    Engine_GetPointer(&mouse_x, &mouse_y);
 
     int width, height;
     Engine_WinDrawableSize(&width, &height);

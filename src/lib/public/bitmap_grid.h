@@ -354,235 +354,9 @@ static inline uint64_t bg_keep_bits_below(uint64_t w, int bit_hi)
  * ============================================================================ 
  */
 
-#define BITMAP_GRID_IMPL(scope, name, type)                                                       \
-                                                                                               \
-    /* ====================================================================== */               \
-    /* Section 1: Per-instance helpers                                        */               \
-    /* ====================================================================== */               \
-                                                                                               \
-    /* Convert a scaled int32 x coordinate into the cell column it belongs                 */  \
-    /* to, clamped to [0, grid_w). Out-of-bounds positions get pushed to the               */  \
-    /* nearest edge cell -- callers are responsible for not relying on this                */  \
-    /* for in-bounds correctness.                                                          */  \
-    static inline int _bg_##name##_cell_x_from_int(const bg(name) *bg, int32_t ix)             \
-    {                                                                                          \
-        int cx = (ix - bg->origin_x) >> BG_CELL_LOG2_INT;                                      \
-        if(cx < 0) cx = 0;                                                                     \
-        if(cx >= bg->grid_w) cx = bg->grid_w - 1;                                              \
-        return cx;                                                                             \
-    }                                                                                          \
-    static inline int _bg_##name##_cell_y_from_int(const bg(name) *bg, int32_t iy)             \
-    {                                                                                          \
-        int cy = (iy - bg->origin_y) >> BG_CELL_LOG2_INT;                                      \
-        if(cy < 0) cy = 0;                                                                     \
-        if(cy >= bg->grid_h) cy = bg->grid_h - 1;                                              \
-        return cy;                                                                             \
-    }                                                                                          \
-                                                                                               \
-    /* Grow all four pool arrays to at least want_cap entries. Returns false               */  \
-    /* on overflow or alloc failure. Growth factor 1.5x; the partially-grown               */  \
-    /* state on alloc failure is correct (each array is independently sized                */  \
-    /* by the last successful realloc), but elts_cap won't be updated.                     */  \
-    static bool _bg_##name##_grow(bg(name) *bg, int32_t want_cap)                              \
-    {                                                                                          \
-        if(want_cap <= bg->elts_cap) return true;                                              \
-        /* Floor the seed at 16 so the 1.5x step always advances; without this,            */  \
-        /* a post-cleanup elts_cap of 0 or 1 would stall (1 + (1>>1) == 1).                */  \
-        int32_t new_cap = bg->elts_cap < 16 ? 16 : bg->elts_cap;                               \
-        while(new_cap < want_cap) {                                                            \
-            int32_t next = new_cap + (new_cap >> 1);                                           \
-            if(next <= new_cap) return false; /* int32 overflow */                             \
-            new_cap = next;                                                                    \
-        }                                                                                      \
-        int32_t *nxs = (int32_t*)PF_REALLOC(bg->xs, (size_t)new_cap * sizeof(int32_t));           \
-        if(!nxs) return false;                                                                 \
-        bg->xs = nxs;                                                                          \
-        int32_t *nys = (int32_t*)PF_REALLOC(bg->ys, (size_t)new_cap * sizeof(int32_t));           \
-        if(!nys) return false;                                                                 \
-        bg->ys = nys;                                                                          \
-        int32_t *nn  = (int32_t*)PF_REALLOC(bg->nexts, (size_t)new_cap * sizeof(int32_t));        \
-        if(!nn) return false;                                                                  \
-        bg->nexts = nn;                                                                        \
-        type    *nr  = (type*)   PF_REALLOC(bg->records, (size_t)new_cap * sizeof(type));         \
-        if(!nr) return false;                                                                  \
-        bg->records = nr;                                                                      \
-        bg->elts_cap = new_cap;                                                                \
-        return true;                                                                           \
-    }                                                                                          \
-                                                                                               \
-    /* Allocate a pool slot. Takes from the free list when one is available,               */  \
-    /* otherwise extends the pool by one and grows if needed. Returns the                  */  \
-    /* slot index, or -1 on alloc failure.                                                 */  \
-    static int32_t _bg_##name##_alloc_slot(bg(name) *bg)                                       \
-    {                                                                                          \
-        if(bg->first_free >= 0) {                                                              \
-            int32_t s = bg->first_free;                                                        \
-            bg->first_free = bg->nexts[s];                                                     \
-            return s;                                                                          \
-        }                                                                                      \
-        if(bg->elts_size >= bg->elts_cap) {                                                    \
-            if(!_bg_##name##_grow(bg, bg->elts_size + 1)) return -1;                           \
-        }                                                                                      \
-        return bg->elts_size++;                                                                \
-    }                                                                                          \
-                                                                                               \
-    /* Push a slot onto the free list. Threaded through nexts[].                           */  \
-    static void _bg_##name##_free_slot(bg(name) *bg, int32_t s)                                \
-    {                                                                                          \
-        bg->nexts[s] = bg->first_free;                                                         \
-        bg->first_free = s;                                                                    \
-    }                                                                                          \
-                                                                                               \
-    /* Set the fine bit for (cx, cy) AND the coarse bit covering that 8x8                  */  \
-    /* block. Called by insert (the coarse bit is monotone-up: insert sets,                */  \
-    /* only cleanup clears).                                                               */  \
-    static inline void _bg_##name##_bm_set_fine_and_coarse(bg(name) *bg, int cx, int cy)       \
-    {                                                                                          \
-        bg->bm_fine[cy * bg->bm_fine_row_u64 + (cx >> 6)] |= (1ull << (cx & 63));              \
-        int cxc = cx >> BG_COARSE_LOG2;                                                        \
-        int cyc = cy >> BG_COARSE_LOG2;                                                        \
-        bg->bm_coarse[cyc * bg->bm_coarse_row_u64 + (cxc >> 6)] |= (1ull << (cxc & 63));       \
-    }                                                                                          \
-                                                                                               \
-    /* Clear the fine bit for (cx, cy). The coarse bit is NOT cleared here;                */  \
-    /* it's left as a (possibly stale) "1" until cleanup() decides whether                 */  \
-    /* the whole 8x8 block is empty. This lazy approach avoids paying for an               */  \
-    /* OR-reduce of 64 fine bits on every delete.                                          */  \
-    static inline void _bg_##name##_bm_clear_fine(bg(name) *bg, int cx, int cy)                \
-    {                                                                                          \
-        bg->bm_fine[cy * bg->bm_fine_row_u64 + (cx >> 6)] &= ~(1ull << (cx & 63));             \
-    }                                                                                          \
-                                                                                               \
-    /* True iff a cell has no packed elements and no overflow elements.                    */  \
-    static inline bool _bg_##name##_cell_empty(const bg_cell(name) *c)                         \
-    {                                                                                          \
-        return c->packed_size == 0 && c->overflow_head < 0;                                    \
-    }                                                                                          \
-                                                                                               \
-    /* ====================================================================== */               \
-    /* Section 2: AVX2 compress-store LUT                                     */               \
-    /*                                                                        */               \
-    /* For the AVX2 rect scanner with 8-lane masks, we need to compact the    */               \
-    /* records selected by an 8-bit mask to the front of a __m256i and store  */               \
-    /* them. AVX2 has no native compress-store (that's an AVX-512 feature),   */               \
-    /* so we precompute a 256-entry LUT of __m256i permutations:              */               \
-    /*                                                                        */               \
-    /*    perm8_lut[mask][k] = lane index of the k'th passing element         */               \
-    /*                                                                        */               \
-    /* Example: mask = 0b10010100 (lanes 2, 4, 7 pass).                       */               \
-    /*    perm8_lut[0b10010100] = {2, 4, 7, 0, 0, 0, 0, 0}                    */               \
-    /*    _mm256_permutevar8x32_epi32(records, perm) places r2, r4, r7 in     */               \
-    /*    the first three lanes; the rest are "don't-care" (will be           */               \
-    /*    overwritten by the next iteration's store).                         */               \
-    /*                                                                        */               \
-    /* Total LUT size = 256 entries * 8 ints * 4 bytes = 8 KB. Fits in L1.    */               \
-    /* The 16-entry LUT for the AVX2 circle scanner (4-bit mask, 16-byte      */               \
-    /* shuffle vector each) is defined inline as a static const inside that   */               \
-    /* function since it's small and never modified.                          */               \
-    /* ====================================================================== */               \
-                                                                                               \
-    static int32_t _bg_##name##_perm8_lut[256][8];                                             \
-    static bool    _bg_##name##_perm8_lut_inited = false;                                      \
-                                                                                               \
-    static void _bg_##name##_init_perm8_lut(void)                                              \
-    {                                                                                          \
-        if(_bg_##name##_perm8_lut_inited) return;                                              \
-        for(int mask = 0; mask < 256; mask++) {                                                \
-            int next = 0;                                                                      \
-            /* Walk the bits of `mask` low-to-high. For each set bit, record                */ \
-            /* its lane index in the next slot of this LUT entry.                           */ \
-            for(int b = 0; b < 8; b++) {                                                       \
-                if((mask >> b) & 1) {                                                          \
-                    _bg_##name##_perm8_lut[mask][next++] = b;                                  \
-                }                                                                              \
-            }                                                                                  \
-            /* The remaining slots in the entry are don't-care; we fill with                */ \
-            /* zero for deterministic content.                                              */ \
-            for(int k = next; k < 8; k++) _bg_##name##_perm8_lut[mask][k] = 0;                 \
-        }                                                                                      \
-        _bg_##name##_perm8_lut_inited = true;                                                  \
-    }                                                                                          \
-                                                                                               \
-    /* ====================================================================== */               \
-    /* Section 3: Per-cell scan functions                                     */               \
-    /*                                                                        */               \
-    /* The bitmap-driven cell iteration in inrange_rect / inrange_circle      */               \
-    /* invokes these for each occupied cell it visits. The function pointer   */               \
-    /* table in section 4 picks the widest variant the CPU supports.          */               \
-    /*                                                                        */               \
-    /* Each scanner has the same contract:                                    */               \
-    /*    Inputs : xs, ys, records pointers into the packed run; n            */               \
-    /*             elements to test; query parameters; out buffer + offset.   */               \
-    /*    Output : updated `written`. Appends matching records to             */               \
-    /*             out[written..written+m), increments by m hits.             */               \
-    /*    Returns: new `written` value.                                       */               \
-    /*                                                                        */               \
-    /* Each scanner branches on `maxout - written >= n`:                      */               \
-    /*    - Fast path: the output buffer has room for every element being     */               \
-    /*      scanned, so no per-iteration bounds check is needed. This is the  */               \
-    /*      common case in the engine (callers size the output to n_entities  */               \
-    /*      or larger).                                                       */               \
-    /*    - Bounded path: scalar branchless emit with a maxout check each     */               \
-    /*      iteration. Slower but never overflows.                            */               \
-    /* ====================================================================== */               \
-                                                                                               \
-    /* -- Scalar scanners ---------------------------------------------------- */              \
-                                                                                               \
-    /* Branchless compress-store: write the record unconditionally, advance                */  \
-    /* `written` by 0 or 1 depending on the pass mask. Modern CPUs pipeline                */  \
-    /* this very effectively via out-of-order execution -- the "scalar" path               */  \
-    /* runs at ~2-3 cycles per element with no actual SIMD instructions.                   */  \
-                                                                                               \
-    static int _bg_##name##_scan_rect_scalar(                                                  \
-        const int32_t *xs, const int32_t *ys, const type *records, int32_t n,                  \
-        int32_t imnx, int32_t imxx, int32_t imny, int32_t imxy,                                \
-        type *out, int written, int maxout)                                                    \
-    {                                                                                          \
-        if(maxout - written >= n) {                                                            \
-            for(int32_t i = 0; i < n; i++) {                                                   \
-                int pass = (xs[i] >= imnx) & (xs[i] <= imxx)                                   \
-                         & (ys[i] >= imny) & (ys[i] <= imxy);                                  \
-                out[written] = records[i];                                                     \
-                written += pass;                                                               \
-            }                                                                                  \
-        } else {                                                                               \
-            for(int32_t i = 0; i < n; i++) {                                                   \
-                int pass = (xs[i] >= imnx) & (xs[i] <= imxx)                                   \
-                         & (ys[i] >= imny) & (ys[i] <= imxy);                                  \
-                out[written] = records[i];                                                     \
-                written += pass;                                                               \
-                if(written >= maxout) return maxout;                                           \
-            }                                                                                  \
-        }                                                                                      \
-        return written;                                                                        \
-    }                                                                                          \
-                                                                                               \
-    static int _bg_##name##_scan_circle_scalar(                                                \
-        const int32_t *xs, const int32_t *ys, const type *records, int32_t n,                  \
-        int32_t icx, int32_t icy, int64_t ir2,                                                 \
-        type *out, int written, int maxout)                                                    \
-    {                                                                                          \
-        if(maxout - written >= n) {                                                            \
-            for(int32_t i = 0; i < n; i++) {                                                   \
-                int64_t dx = (int64_t)xs[i] - (int64_t)icx;                                    \
-                int64_t dy = (int64_t)ys[i] - (int64_t)icy;                                    \
-                int pass = (dx * dx + dy * dy <= ir2);                                         \
-                out[written] = records[i];                                                     \
-                written += pass;                                                               \
-            }                                                                                  \
-        } else {                                                                               \
-            for(int32_t i = 0; i < n; i++) {                                                   \
-                int64_t dx = (int64_t)xs[i] - (int64_t)icx;                                    \
-                int64_t dy = (int64_t)ys[i] - (int64_t)icy;                                    \
-                int pass = (dx * dx + dy * dy <= ir2);                                         \
-                out[written] = records[i];                                                     \
-                written += pass;                                                               \
-                if(written >= maxout) return maxout;                                           \
-            }                                                                                  \
-        }                                                                                      \
-        return written;                                                                        \
-    }                                                                                          \
-                                                                                               \
+/* Wide SIMD scanners — only emitted when the toolchain can target AVX. */
+#if SIMD_HAS_TARGET_AVX2
+#define BITMAP_GRID_SIMD_WIDE_SCANNERS(name, type) \
     /* -- AVX2 scanners ------------------------------------------------------ */              \
                                                                                                \
     /* AVX2 rectangle test, 8 elements per iteration.                                     */   \
@@ -889,6 +663,258 @@ static inline uint64_t bg_keep_bits_below(uint64_t w, int bit_hi)
         return written;                                                                        \
     }                                                                                          \
                                                                                                \
+
+#else /* !SIMD_HAS_TARGET_AVX2 */
+#define BITMAP_GRID_SIMD_WIDE_SCANNERS(name, type) /* scalar-only: no AVX scanners */
+#endif
+
+#if SIMD_HAS_TARGET_AVX2
+#define BITMAP_GRID_TRY_UPGRADE_SIMD(name) \
+    do { \
+        if(simd_avx2_supported()) { \
+            _bg_##name##_init_perm8_lut(); \
+            _bg_##name##_scan_rect   = _bg_##name##_scan_rect_avx2; \
+            _bg_##name##_scan_circle = _bg_##name##_scan_circle_avx2; \
+        } \
+        if(SIMD_HAS_TARGET_AVX512F && simd_avx512_supported()) { \
+            _bg_##name##_scan_rect_long   = _bg_##name##_scan_rect_avx512; \
+            _bg_##name##_scan_circle_long = _bg_##name##_scan_circle_avx512; \
+        } \
+    } while(0)
+#else
+#define BITMAP_GRID_TRY_UPGRADE_SIMD(name) do { } while(0)
+#endif
+
+#define BITMAP_GRID_IMPL(scope, name, type)                                                       \
+                                                                                               \
+    /* ====================================================================== */               \
+    /* Section 1: Per-instance helpers                                        */               \
+    /* ====================================================================== */               \
+                                                                                               \
+    /* Convert a scaled int32 x coordinate into the cell column it belongs                 */  \
+    /* to, clamped to [0, grid_w). Out-of-bounds positions get pushed to the               */  \
+    /* nearest edge cell -- callers are responsible for not relying on this                */  \
+    /* for in-bounds correctness.                                                          */  \
+    static inline int _bg_##name##_cell_x_from_int(const bg(name) *bg, int32_t ix)             \
+    {                                                                                          \
+        int cx = (ix - bg->origin_x) >> BG_CELL_LOG2_INT;                                      \
+        if(cx < 0) cx = 0;                                                                     \
+        if(cx >= bg->grid_w) cx = bg->grid_w - 1;                                              \
+        return cx;                                                                             \
+    }                                                                                          \
+    static inline int _bg_##name##_cell_y_from_int(const bg(name) *bg, int32_t iy)             \
+    {                                                                                          \
+        int cy = (iy - bg->origin_y) >> BG_CELL_LOG2_INT;                                      \
+        if(cy < 0) cy = 0;                                                                     \
+        if(cy >= bg->grid_h) cy = bg->grid_h - 1;                                              \
+        return cy;                                                                             \
+    }                                                                                          \
+                                                                                               \
+    /* Grow all four pool arrays to at least want_cap entries. Returns false               */  \
+    /* on overflow or alloc failure. Growth factor 1.5x; the partially-grown               */  \
+    /* state on alloc failure is correct (each array is independently sized                */  \
+    /* by the last successful realloc), but elts_cap won't be updated.                     */  \
+    static bool _bg_##name##_grow(bg(name) *bg, int32_t want_cap)                              \
+    {                                                                                          \
+        if(want_cap <= bg->elts_cap) return true;                                              \
+        /* Floor the seed at 16 so the 1.5x step always advances; without this,            */  \
+        /* a post-cleanup elts_cap of 0 or 1 would stall (1 + (1>>1) == 1).                */  \
+        int32_t new_cap = bg->elts_cap < 16 ? 16 : bg->elts_cap;                               \
+        while(new_cap < want_cap) {                                                            \
+            int32_t next = new_cap + (new_cap >> 1);                                           \
+            if(next <= new_cap) return false; /* int32 overflow */                             \
+            new_cap = next;                                                                    \
+        }                                                                                      \
+        int32_t *nxs = (int32_t*)PF_REALLOC(bg->xs, (size_t)new_cap * sizeof(int32_t));           \
+        if(!nxs) return false;                                                                 \
+        bg->xs = nxs;                                                                          \
+        int32_t *nys = (int32_t*)PF_REALLOC(bg->ys, (size_t)new_cap * sizeof(int32_t));           \
+        if(!nys) return false;                                                                 \
+        bg->ys = nys;                                                                          \
+        int32_t *nn  = (int32_t*)PF_REALLOC(bg->nexts, (size_t)new_cap * sizeof(int32_t));        \
+        if(!nn) return false;                                                                  \
+        bg->nexts = nn;                                                                        \
+        type    *nr  = (type*)   PF_REALLOC(bg->records, (size_t)new_cap * sizeof(type));         \
+        if(!nr) return false;                                                                  \
+        bg->records = nr;                                                                      \
+        bg->elts_cap = new_cap;                                                                \
+        return true;                                                                           \
+    }                                                                                          \
+                                                                                               \
+    /* Allocate a pool slot. Takes from the free list when one is available,               */  \
+    /* otherwise extends the pool by one and grows if needed. Returns the                  */  \
+    /* slot index, or -1 on alloc failure.                                                 */  \
+    static int32_t _bg_##name##_alloc_slot(bg(name) *bg)                                       \
+    {                                                                                          \
+        if(bg->first_free >= 0) {                                                              \
+            int32_t s = bg->first_free;                                                        \
+            bg->first_free = bg->nexts[s];                                                     \
+            return s;                                                                          \
+        }                                                                                      \
+        if(bg->elts_size >= bg->elts_cap) {                                                    \
+            if(!_bg_##name##_grow(bg, bg->elts_size + 1)) return -1;                           \
+        }                                                                                      \
+        return bg->elts_size++;                                                                \
+    }                                                                                          \
+                                                                                               \
+    /* Push a slot onto the free list. Threaded through nexts[].                           */  \
+    static void _bg_##name##_free_slot(bg(name) *bg, int32_t s)                                \
+    {                                                                                          \
+        bg->nexts[s] = bg->first_free;                                                         \
+        bg->first_free = s;                                                                    \
+    }                                                                                          \
+                                                                                               \
+    /* Set the fine bit for (cx, cy) AND the coarse bit covering that 8x8                  */  \
+    /* block. Called by insert (the coarse bit is monotone-up: insert sets,                */  \
+    /* only cleanup clears).                                                               */  \
+    static inline void _bg_##name##_bm_set_fine_and_coarse(bg(name) *bg, int cx, int cy)       \
+    {                                                                                          \
+        bg->bm_fine[cy * bg->bm_fine_row_u64 + (cx >> 6)] |= (1ull << (cx & 63));              \
+        int cxc = cx >> BG_COARSE_LOG2;                                                        \
+        int cyc = cy >> BG_COARSE_LOG2;                                                        \
+        bg->bm_coarse[cyc * bg->bm_coarse_row_u64 + (cxc >> 6)] |= (1ull << (cxc & 63));       \
+    }                                                                                          \
+                                                                                               \
+    /* Clear the fine bit for (cx, cy). The coarse bit is NOT cleared here;                */  \
+    /* it's left as a (possibly stale) "1" until cleanup() decides whether                 */  \
+    /* the whole 8x8 block is empty. This lazy approach avoids paying for an               */  \
+    /* OR-reduce of 64 fine bits on every delete.                                          */  \
+    static inline void _bg_##name##_bm_clear_fine(bg(name) *bg, int cx, int cy)                \
+    {                                                                                          \
+        bg->bm_fine[cy * bg->bm_fine_row_u64 + (cx >> 6)] &= ~(1ull << (cx & 63));             \
+    }                                                                                          \
+                                                                                               \
+    /* True iff a cell has no packed elements and no overflow elements.                    */  \
+    static inline bool _bg_##name##_cell_empty(const bg_cell(name) *c)                         \
+    {                                                                                          \
+        return c->packed_size == 0 && c->overflow_head < 0;                                    \
+    }                                                                                          \
+                                                                                               \
+    /* ====================================================================== */               \
+    /* Section 2: AVX2 compress-store LUT                                     */               \
+    /*                                                                        */               \
+    /* For the AVX2 rect scanner with 8-lane masks, we need to compact the    */               \
+    /* records selected by an 8-bit mask to the front of a __m256i and store  */               \
+    /* them. AVX2 has no native compress-store (that's an AVX-512 feature),   */               \
+    /* so we precompute a 256-entry LUT of __m256i permutations:              */               \
+    /*                                                                        */               \
+    /*    perm8_lut[mask][k] = lane index of the k'th passing element         */               \
+    /*                                                                        */               \
+    /* Example: mask = 0b10010100 (lanes 2, 4, 7 pass).                       */               \
+    /*    perm8_lut[0b10010100] = {2, 4, 7, 0, 0, 0, 0, 0}                    */               \
+    /*    _mm256_permutevar8x32_epi32(records, perm) places r2, r4, r7 in     */               \
+    /*    the first three lanes; the rest are "don't-care" (will be           */               \
+    /*    overwritten by the next iteration's store).                         */               \
+    /*                                                                        */               \
+    /* Total LUT size = 256 entries * 8 ints * 4 bytes = 8 KB. Fits in L1.    */               \
+    /* The 16-entry LUT for the AVX2 circle scanner (4-bit mask, 16-byte      */               \
+    /* shuffle vector each) is defined inline as a static const inside that   */               \
+    /* function since it's small and never modified.                          */               \
+    /* ====================================================================== */               \
+                                                                                               \
+    static int32_t _bg_##name##_perm8_lut[256][8];                                             \
+    static bool    _bg_##name##_perm8_lut_inited = false;                                      \
+                                                                                               \
+    static void _bg_##name##_init_perm8_lut(void)                                              \
+    {                                                                                          \
+        if(_bg_##name##_perm8_lut_inited) return;                                              \
+        for(int mask = 0; mask < 256; mask++) {                                                \
+            int next = 0;                                                                      \
+            /* Walk the bits of `mask` low-to-high. For each set bit, record                */ \
+            /* its lane index in the next slot of this LUT entry.                           */ \
+            for(int b = 0; b < 8; b++) {                                                       \
+                if((mask >> b) & 1) {                                                          \
+                    _bg_##name##_perm8_lut[mask][next++] = b;                                  \
+                }                                                                              \
+            }                                                                                  \
+            /* The remaining slots in the entry are don't-care; we fill with                */ \
+            /* zero for deterministic content.                                              */ \
+            for(int k = next; k < 8; k++) _bg_##name##_perm8_lut[mask][k] = 0;                 \
+        }                                                                                      \
+        _bg_##name##_perm8_lut_inited = true;                                                  \
+    }                                                                                          \
+                                                                                               \
+    /* ====================================================================== */               \
+    /* Section 3: Per-cell scan functions                                     */               \
+    /*                                                                        */               \
+    /* The bitmap-driven cell iteration in inrange_rect / inrange_circle      */               \
+    /* invokes these for each occupied cell it visits. The function pointer   */               \
+    /* table in section 4 picks the widest variant the CPU supports.          */               \
+    /*                                                                        */               \
+    /* Each scanner has the same contract:                                    */               \
+    /*    Inputs : xs, ys, records pointers into the packed run; n            */               \
+    /*             elements to test; query parameters; out buffer + offset.   */               \
+    /*    Output : updated `written`. Appends matching records to             */               \
+    /*             out[written..written+m), increments by m hits.             */               \
+    /*    Returns: new `written` value.                                       */               \
+    /*                                                                        */               \
+    /* Each scanner branches on `maxout - written >= n`:                      */               \
+    /*    - Fast path: the output buffer has room for every element being     */               \
+    /*      scanned, so no per-iteration bounds check is needed. This is the  */               \
+    /*      common case in the engine (callers size the output to n_entities  */               \
+    /*      or larger).                                                       */               \
+    /*    - Bounded path: scalar branchless emit with a maxout check each     */               \
+    /*      iteration. Slower but never overflows.                            */               \
+    /* ====================================================================== */               \
+                                                                                               \
+    /* -- Scalar scanners ---------------------------------------------------- */              \
+                                                                                               \
+    /* Branchless compress-store: write the record unconditionally, advance                */  \
+    /* `written` by 0 or 1 depending on the pass mask. Modern CPUs pipeline                */  \
+    /* this very effectively via out-of-order execution -- the "scalar" path               */  \
+    /* runs at ~2-3 cycles per element with no actual SIMD instructions.                   */  \
+                                                                                               \
+    static int _bg_##name##_scan_rect_scalar(                                                  \
+        const int32_t *xs, const int32_t *ys, const type *records, int32_t n,                  \
+        int32_t imnx, int32_t imxx, int32_t imny, int32_t imxy,                                \
+        type *out, int written, int maxout)                                                    \
+    {                                                                                          \
+        if(maxout - written >= n) {                                                            \
+            for(int32_t i = 0; i < n; i++) {                                                   \
+                int pass = (xs[i] >= imnx) & (xs[i] <= imxx)                                   \
+                         & (ys[i] >= imny) & (ys[i] <= imxy);                                  \
+                out[written] = records[i];                                                     \
+                written += pass;                                                               \
+            }                                                                                  \
+        } else {                                                                               \
+            for(int32_t i = 0; i < n; i++) {                                                   \
+                int pass = (xs[i] >= imnx) & (xs[i] <= imxx)                                   \
+                         & (ys[i] >= imny) & (ys[i] <= imxy);                                  \
+                out[written] = records[i];                                                     \
+                written += pass;                                                               \
+                if(written >= maxout) return maxout;                                           \
+            }                                                                                  \
+        }                                                                                      \
+        return written;                                                                        \
+    }                                                                                          \
+                                                                                               \
+    static int _bg_##name##_scan_circle_scalar(                                                \
+        const int32_t *xs, const int32_t *ys, const type *records, int32_t n,                  \
+        int32_t icx, int32_t icy, int64_t ir2,                                                 \
+        type *out, int written, int maxout)                                                    \
+    {                                                                                          \
+        if(maxout - written >= n) {                                                            \
+            for(int32_t i = 0; i < n; i++) {                                                   \
+                int64_t dx = (int64_t)xs[i] - (int64_t)icx;                                    \
+                int64_t dy = (int64_t)ys[i] - (int64_t)icy;                                    \
+                int pass = (dx * dx + dy * dy <= ir2);                                         \
+                out[written] = records[i];                                                     \
+                written += pass;                                                               \
+            }                                                                                  \
+        } else {                                                                               \
+            for(int32_t i = 0; i < n; i++) {                                                   \
+                int64_t dx = (int64_t)xs[i] - (int64_t)icx;                                    \
+                int64_t dy = (int64_t)ys[i] - (int64_t)icy;                                    \
+                int pass = (dx * dx + dy * dy <= ir2);                                         \
+                out[written] = records[i];                                                     \
+                written += pass;                                                               \
+                if(written >= maxout) return maxout;                                           \
+            }                                                                                  \
+        }                                                                                      \
+        return written;                                                                        \
+    }                                                                                          \
+                                                                                               \
+    BITMAP_GRID_SIMD_WIDE_SCANNERS(name, type)                                       \
     /* ====================================================================== */               \
     /* Section 4: Runtime SIMD dispatch                                       */               \
     /*                                                                        */               \
@@ -931,25 +957,11 @@ static inline uint64_t bg_keep_bits_below(uint64_t w, int bit_hi)
     static void _bg_##name##_init_simd(void)                                                   \
     {                                                                                          \
         if(_bg_##name##_scan_rect != NULL) return;                                             \
-        /* Cell-loop dispatch: AVX2 (with compress-store LUT) when available,              */  \
-        /* otherwise scalar. AVX-512 is intentionally NOT used here.                       */  \
-        if(SIMD_HAS_TARGET_AVX2 && simd_avx2_supported()) {                                    \
-            _bg_##name##_init_perm8_lut();                                                     \
-            _bg_##name##_scan_rect   = _bg_##name##_scan_rect_avx2;                            \
-            _bg_##name##_scan_circle = _bg_##name##_scan_circle_avx2;                          \
-        } else {                                                                               \
-            _bg_##name##_scan_rect   = _bg_##name##_scan_rect_scalar;                          \
-            _bg_##name##_scan_circle = _bg_##name##_scan_circle_scalar;                        \
-        }                                                                                      \
-        /* Long-scan dispatch: AVX-512 if available, else fall back to the                 */  \
-        /* cell-loop variant.                                                              */  \
-        if(SIMD_HAS_TARGET_AVX512F && simd_avx512_supported()) {                               \
-            _bg_##name##_scan_rect_long   = _bg_##name##_scan_rect_avx512;                     \
-            _bg_##name##_scan_circle_long = _bg_##name##_scan_circle_avx512;                   \
-        } else {                                                                               \
-            _bg_##name##_scan_rect_long   = _bg_##name##_scan_rect;                            \
-            _bg_##name##_scan_circle_long = _bg_##name##_scan_circle;                          \
-        }                                                                                      \
+        _bg_##name##_scan_rect   = _bg_##name##_scan_rect_scalar;                              \
+        _bg_##name##_scan_circle = _bg_##name##_scan_circle_scalar;                            \
+        _bg_##name##_scan_rect_long   = _bg_##name##_scan_rect;                                \
+        _bg_##name##_scan_circle_long = _bg_##name##_scan_circle;                              \
+        BITMAP_GRID_TRY_UPGRADE_SIMD(name);                                                    \
     }                                                                                          \
                                                                                                \
     /* ====================================================================== */               \
@@ -1335,10 +1347,8 @@ static inline uint64_t bg_keep_bits_below(uint64_t w, int bit_hi)
                                 const bg_cell(name) *nc =                                      \
                                     &bg->cells[fy * bg->grid_w + (fu * 64 + nb)];              \
                                 if(nc->packed_size > 0) {                                      \
-                                    _mm_prefetch((const char*)&bg->xs[nc->packed_start],       \
-                                                 _MM_HINT_T0);                                 \
-                                    _mm_prefetch((const char*)&bg->ys[nc->packed_start],       \
-                                                 _MM_HINT_T0);                                 \
+                                    SIMD_PREFETCH(&bg->xs[nc->packed_start]);                  \
+                                    SIMD_PREFETCH(&bg->ys[nc->packed_start]);                  \
                                 }                                                              \
                             }                                                                  \
                             w = next_w;                                                        \
@@ -1430,10 +1440,8 @@ static inline uint64_t bg_keep_bits_below(uint64_t w, int bit_hi)
                                 const bg_cell(name) *nc =                                      \
                                     &bg->cells[fy * bg->grid_w + (fu * 64 + nb)];              \
                                 if(nc->packed_size > 0) {                                      \
-                                    _mm_prefetch((const char*)&bg->xs[nc->packed_start],       \
-                                                 _MM_HINT_T0);                                 \
-                                    _mm_prefetch((const char*)&bg->ys[nc->packed_start],       \
-                                                 _MM_HINT_T0);                                 \
+                                    SIMD_PREFETCH(&bg->xs[nc->packed_start]);                  \
+                                    SIMD_PREFETCH(&bg->ys[nc->packed_start]);                  \
                                 }                                                              \
                             }                                                                  \
                             w = next_w;                                                        \

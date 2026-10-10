@@ -142,6 +142,11 @@ Step-by-step (engine + login/room servers + two lobby UIs):
 
 See **[docs/local_build_test.md](docs/local_build_test.md)**.
 
+#### Android APK / libpermafrost.so ####
+
+Scaffold exists under **[android/](android/)**: Gradle builds an APK that loads `libpermafrost.so`.  
+This is **not** a full port of desktop `pf.exe` yet (JNI/stub sources only). Status and build steps: **[android/README.md](android/README.md)**.
+
 Quick start after binaries exist:
 
 ```powershell

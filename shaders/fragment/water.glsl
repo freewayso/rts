@@ -256,7 +256,6 @@ bool should_discard(vec2 ndc_pos)
     if(abs(depth - left) > 18.0)
         return true;
     if(abs(depth - right) > 18.0)
-        return true;
     return false;
 }
 
@@ -277,6 +276,7 @@ void main()
 
     float ground_dist = linearize_depth(texture(refraction_depth, ndc_pos).r);
     float water_dist = linearize_depth(gl_FragCoord.z);
+    float water_depth = ground_dist - water_dist;
     float water_depth = max(ground_dist - water_dist, 0.0);
     /* Wide shallow ramp: banks dissolve instead of a hard water cut. */
     float depth_damping_factor = smoothstep(0.0, 9.0, water_depth);
@@ -314,7 +314,6 @@ void main()
                  + vec4(specular, 0.0);
     o_frag_color = mix(o_frag_color, SHORE_FOAM_CLR, foam * 0.35);
     o_frag_color.a = mix(0.22, 0.88, depth_damping_factor);
-
     o_frag_color *= tf;
 }
 
